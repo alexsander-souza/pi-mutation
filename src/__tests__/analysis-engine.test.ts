@@ -1,0 +1,165 @@
+import { describe, expect, it } from "bun:test";
+import { type AnalysisOpts, analyzeAndGenerate } from "../analysis-engine";
+import type { AnalysisError, Mutation } from "../types";
+
+function makeOpts(
+	llmCall: (prompt: string) => Promise<string>,
+	overrides: Partial<AnalysisOpts> = {},
+): AnalysisOpts {
+	return {
+		sourceCode: "def add(a, b):\n    return a + b",
+		testCode: "def test_add():\n    assert add(1, 2) == 3",
+		target: "add",
+		scope: "function",
+		maxMutations: 10,
+		language: "python",
+		llmCall,
+		...overrides,
+	};
+}
+
+function isError(result: Mutation[] | AnalysisError): result is AnalysisError {
+	return !Array.isArray(result);
+}
+
+function makeItem(index: number): Mutation {
+	return {
+		id: `m${String(index + 1).padStart(3, "0")}`,
+		description: `mutation ${index + 1}`,
+		hotspot: `line ${index + 1}`,
+		replacement: `def add(a, b):\n    return a - b  # mutant ${index + 1}`,
+		explanation: `reason ${index + 1}`,
+	};
+}
+
+describe("analyzeAndGenerate", () => {
+	it("returns Mutation[] for a valid JSON array response", async () => {
+		const items = [makeItem(0), makeItem(1)];
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => JSON.stringify(items)),
+		);
+		expect(isError(result)).toBe(false);
+		if (isError(result)) return;
+		expect(result).toHaveLength(2);
+		expect(result[0]).toEqual(items[0]);
+		expect(result[1]).toEqual(items[1]);
+	});
+
+	it("parses JSON wrapped in a ```json markdown fence", async () => {
+		const items = [makeItem(0)];
+		const response = `Here are the mutations:\n\n\`\`\`json\n${JSON.stringify(items, null, 2)}\n\`\`\`\n`;
+		const result = await analyzeAndGenerate(makeOpts(async () => response));
+		expect(isError(result)).toBe(false);
+		if (isError(result)) return;
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("m001");
+	});
+
+	it("parses a plain ``` fence without a language tag", async () => {
+		const items = [makeItem(0)];
+		const response = `\`\`\`\n${JSON.stringify(items)}\n\`\`\``;
+		const result = await analyzeAndGenerate(makeOpts(async () => response));
+		expect(isError(result)).toBe(false);
+		if (isError(result)) return;
+		expect(result).toHaveLength(1);
+	});
+
+	it("returns parse_error for malformed JSON", async () => {
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => "this is not json at all"),
+		);
+		expect(isError(result)).toBe(true);
+		if (!isError(result)) return;
+		expect(result.kind).toBe("parse_error");
+		expect(result.message).toBeString();
+	});
+
+	it("returns parse_error when JSON parses but is not an array", async () => {
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => JSON.stringify({ id: "m001" })),
+		);
+		expect(isError(result)).toBe(true);
+		if (!isError(result)) return;
+		expect(result.kind).toBe("parse_error");
+	});
+
+	it("slices to maxMutations when the LLM returns more items", async () => {
+		const items = Array.from({ length: 15 }, (_, i) => makeItem(i));
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => JSON.stringify(items), { maxMutations: 10 }),
+		);
+		expect(isError(result)).toBe(false);
+		if (isError(result)) return;
+		expect(result).toHaveLength(10);
+		expect(result[9].id).toBe("m010");
+	});
+
+	it("returns [] for an empty array response (not an error)", async () => {
+		const result = await analyzeAndGenerate(makeOpts(async () => "[]"));
+		expect(isError(result)).toBe(false);
+		if (isError(result)) return;
+		expect(result).toEqual([]);
+	});
+
+	it("drops items missing the replacement field", async () => {
+		const valid = makeItem(0);
+		const missingReplacement = {
+			id: "m002",
+			description: "no replacement here",
+			hotspot: "line 2",
+			explanation: "dropped",
+		};
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => JSON.stringify([valid, missingReplacement])),
+		);
+		expect(isError(result)).toBe(false);
+		if (isError(result)) return;
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("m001");
+	});
+
+	it("drops non-object items mixed into the array", async () => {
+		const valid = makeItem(0);
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => JSON.stringify([valid, "junk", 42, null])),
+		);
+		expect(isError(result)).toBe(false);
+		if (isError(result)) return;
+		expect(result).toHaveLength(1);
+	});
+
+	it("returns llm_error when llmCall rejects", async () => {
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => {
+				throw new Error("provider timeout");
+			}),
+		);
+		expect(isError(result)).toBe(true);
+		if (!isError(result)) return;
+		expect(result.kind).toBe("llm_error");
+		expect(result.message).toContain("provider timeout");
+	});
+
+	it("includes language, scope, target, and sources in the prompt", async () => {
+		let captured = "";
+		await analyzeAndGenerate(
+			makeOpts(
+				async (prompt) => {
+					captured = prompt;
+					return "[]";
+				},
+				{
+					target: "add",
+					language: "python",
+					scope: "function",
+					maxMutations: 5,
+				},
+			),
+		);
+		expect(captured).toContain("python");
+		expect(captured).toContain("add");
+		expect(captured).toContain("return a + b");
+		expect(captured).toContain("assert add(1, 2) == 3");
+		expect(captured).toContain("5");
+	});
+});

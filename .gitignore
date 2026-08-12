@@ -1,0 +1,17 @@
+/node_modules
+/dist
+
+# Backup files left behind if the OMP process is SIGKILLed mid-run
+*.pi-mutation-bak
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Go
+fixtures/go/calculator
+
+# OS
+.DS_Store
+Thumbs.db

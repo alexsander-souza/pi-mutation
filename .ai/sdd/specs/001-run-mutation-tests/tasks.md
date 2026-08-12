@@ -60,16 +60,16 @@
 
 | Task | Title | Priority | Estimate | Dependencies | Status |
 |------|-------|----------|----------|--------------|--------|
-| T1 | Project scaffold | P0 | 30m | none | pending |
-| T2 | Shared types | P0 | 30m | T1 | pending |
-| T3 | Target resolver | P0 | 1h | T2 | pending |
-| T4 | Test discovery | P0 | 1h | T2 | pending |
-| T5 | Test runners (Python + Go) + registry | P0 | 2h | T2 | pending |
-| T6 | Analysis engine (LLM prompt + parse) | P0 | 1h | T2 | pending |
-| T7 | Mutation runner (backup/spawn/restore/signal) | P0 | 2h | T3, T4, T5, T6 | pending |
-| T8 | Result builder | P0 | 30m | T2 | pending |
-| T9 | Tool registration (index.ts) | P0 | 30m | T7, T8 | pending |
-| T10 | Integration smoke tests | P1 | 1h | T9 | pending |
+| T1 | Project scaffold | P0 | 30m | none | done |
+| T2 | Shared types | P0 | 30m | T1 | done |
+| T3 | Target resolver | P0 | 1h | T2 | done |
+| T4 | Test discovery | P0 | 1h | T2 | done |
+| T5 | Test runners (Python + Go) + registry | P0 | 2h | T2 | done |
+| T6 | Analysis engine (LLM prompt + parse) | P0 | 1h | T2 | done |
+| T7 | Mutation runner (backup/spawn/restore/signal) | P0 | 2h | T3, T4, T5, T6 | done |
+| T8 | Result builder | P0 | 30m | T2 | done |
+| T9 | Tool registration (index.ts) | P0 | 30m | T7, T8 | done |
+| T10 | Integration smoke tests | P1 | 1h | T9 | done |
 
 ## Dependency Diagram
 
