@@ -131,6 +131,31 @@ describe("analyzeAndGenerate", () => {
 		expect(result).toHaveLength(1);
 	});
 
+	it("drops items whose original snippet is absent from the source", async () => {
+		const valid = makeItem(0); // original "return a + b" is present once
+		const absent = { ...makeItem(1), original: "return a * b" };
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => JSON.stringify([valid, absent])),
+		);
+		expect(isError(result)).toBe(false);
+		if (isError(result)) return;
+		expect(result).toHaveLength(1);
+		expect(result[0].id).toBe("m001");
+	});
+
+	it("drops items whose original snippet is ambiguous (appears >1 time)", async () => {
+		const ambiguous = { ...makeItem(0), original: "a + b" };
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => JSON.stringify([ambiguous]), {
+				sourceCode: "x = a + b\ny = a + b",
+			}),
+		);
+		expect(isError(result)).toBe(true);
+		if (!isError(result)) return;
+		expect(result.kind).toBe("parse_error");
+		expect(result.message).toContain("exactly once");
+	});
+
 	it("returns parse_error when every item is structurally invalid", async () => {
 		const result = await analyzeAndGenerate(
 			makeOpts(async () => JSON.stringify(["junk", 42, null, { id: "m001" }])),
