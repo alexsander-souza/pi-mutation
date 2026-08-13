@@ -1,6 +1,6 @@
 {
   "name": "pi-mutation",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "LLM-guided mutation testing plugin for Oh My Pi",
   "keywords": [
     "oh-my-pi",

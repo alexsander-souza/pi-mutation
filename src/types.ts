@@ -138,6 +138,12 @@ export interface RunMutationsOpts {
   /** Resolved runner — caller resolves from RunnerRegistry before calling */
   runner: TestRunner;
   /**
+   * Test command for Python targets (same value passed to makePythonRunner).
+   * Used to derive a syntax-check interpreter when no bare `python` is on PATH
+   * (e.g. `uv run pytest`, venv `pytest`). Ignored for non-Python languages.
+   */
+  pythonCommand?: string;
+  /**
    * Optional semantic-equivalence judge. When a mutant survives, this is called
    * with the mutation; a truthy `equivalent` verdict reclassifies it as
    * `equivalent` (unkillable) so it is excluded from the score and never

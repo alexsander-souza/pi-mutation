@@ -145,6 +145,18 @@ describe("pythonRunner", () => {
     await expect(pending).rejects.toBeInstanceOf(PythonNotFoundError);
     await expect(pending).rejects.toThrow("test command not found on $PATH: pytest");
   });
+
+  it("caps retained output to the last 64k chars with a truncation marker", async () => {
+    const pending = pythonRunner.runTests(baseOpts());
+    lastChild().pushStdout(`HEAD${"x".repeat(70_000)}TAIL`);
+    lastChild().closeWith(1);
+
+    const result = await pending;
+    expect(result.killed).toBe(true);
+    expect(result.output.startsWith("…[output truncated to last 65536 chars]\n")).toBe(true);
+    expect(result.output).toContain("TAIL");
+    expect(result.output).not.toContain("HEAD");
+  });
 });
 
 describe("makePythonRunner", () => {
@@ -190,14 +202,14 @@ describe("makePythonRunner", () => {
 });
 
 describe("goRunner", () => {
-  it("spawns go test ./... in the working directory", async () => {
+  it("spawns go test in the source package directory", async () => {
     const pending = goRunner.runTests(baseOpts());
     lastChild().closeWith(0);
     await pending;
 
     const call = lastSpawnCall();
     expect(call.command).toBe("go");
-    expect(call.args).toEqual(["test", "./..."]);
+    expect(call.args).toEqual(["test", "."]);
     expect(call.options.cwd).toBe("/repo");
   });
 

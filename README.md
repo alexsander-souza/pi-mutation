@@ -91,8 +91,10 @@ The plugin registers a single LLM-callable tool, `run_mutation_tests`.
 | `prior_mutants` | `Mutation[]`             | —                                | Surviving mutants from a previous run. When supplied, the LLM analysis step is skipped entirely and these exact mutations are retested against the current test suite. |
 
 The tool returns a structured result: total mutations, counts of killed / surviving /
-invalid / timed-out / equivalent mutants, the overall mutation score (equivalent
-mutants are excluded from the denominator), the surviving mutant list, and
+invalid / timed-out / equivalent mutants, and the overall mutation score. The score
+is `killed / (killed + surviving)` — invalid, timed-out, and equivalent mutants are
+all excluded from the denominator, so an unverifiable or unkillable mutant never
+penalizes the score. The result also carries the surviving mutant list and
 test-improvement suggestions. Each mutation is a minimal search/replace patch:
 `original` (the exact snippet to find, unique in the source) and `mutated` (its
 replacement).

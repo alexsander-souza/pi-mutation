@@ -131,6 +131,16 @@ describe("analyzeAndGenerate", () => {
 		expect(result).toHaveLength(1);
 	});
 
+	it("returns parse_error when every item is structurally invalid", async () => {
+		const result = await analyzeAndGenerate(
+			makeOpts(async () => JSON.stringify(["junk", 42, null, { id: "m001" }])),
+		);
+		expect(isError(result)).toBe(true);
+		if (!isError(result)) return;
+		expect(result.kind).toBe("parse_error");
+		expect(result.message).toContain("required fields");
+	});
+
 	it("returns llm_error when llmCall rejects", async () => {
 		const result = await analyzeAndGenerate(
 			makeOpts(async () => {
