@@ -45,6 +45,14 @@ function extractJson(response: string, open: "[" | "{" = "["): string {
 	return response.trim();
 }
 
+/** Cap on each embedded code section (source, tests) to bound prompt size. */
+const MAX_SECTION_CHARS = 24_000;
+
+function clampSection(code: string, label: string): string {
+	if (code.length <= MAX_SECTION_CHARS) return code;
+	return `${code.slice(0, MAX_SECTION_CHARS)}\n… [${label} truncated: ${code.length - MAX_SECTION_CHARS} more characters omitted]`;
+}
+
 function buildPrompt(opts: AnalysisOpts): string {
 	const unit = opts.scope === "function" ? "function" : "file";
 	const framework = opts.language === "python" ? "pytest" : "go test";
@@ -53,11 +61,11 @@ function buildPrompt(opts: AnalysisOpts): string {
 Analyze the ${unit} \`${opts.target}\` and its test code below.
 
 <source>
-${opts.sourceCode}
+${clampSection(opts.sourceCode, "source")}
 </source>
 
 <tests>
-${opts.testCode}
+${clampSection(opts.testCode, "tests")}
 </tests>
 
 Identify up to ${opts.maxMutations} mutation hotspots in the source code — places where a small semantic change is likely to survive undetected by the existing tests.
@@ -115,6 +123,7 @@ export async function analyzeAndGenerate(
 	}
 
 	const mutations: Mutation[] = [];
+	let dropped = 0;
 	for (const item of parsed) {
 		if (isMutationItem(item)) {
 			mutations.push({
@@ -126,7 +135,18 @@ export async function analyzeAndGenerate(
 				explanation: item.explanation,
 				suggestion: item.suggestion,
 			});
+		} else {
+			dropped++;
 		}
+	}
+
+	// All items were structurally invalid — surface it rather than returning an
+	// empty plan that looks like "the LLM found nothing".
+	if (mutations.length === 0 && dropped > 0) {
+		return {
+			kind: "parse_error",
+			message: `LLM returned ${dropped} item${dropped === 1 ? "" : "s"}, none with the required fields (id, description, hotspot, original, mutated, explanation, suggestion)`,
+		};
 	}
 
 	return mutations.slice(0, opts.maxMutations);

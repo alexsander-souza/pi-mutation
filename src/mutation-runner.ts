@@ -6,6 +6,49 @@ import type { Mutation, MutantResult, RunMutationsOpts } from "./types";
 /** Tracks in-progress absolute file paths to prevent concurrent runs on the same file */
 const inProgress: Record<string, true> = {};
 
+/**
+ * Active runs that must restore their backup if the process receives a
+ * catchable termination signal, keyed by absolute source path → backup path.
+ * One shared handler restores every active run and re-raises, instead of each
+ * concurrent run stacking its own SIGINT/SIGTERM listeners.
+ */
+const activeBackups = new Map<string, string>();
+let signalHandlersInstalled = false;
+
+function restoreAllOnSignal(sig: NodeJS.Signals): void {
+  for (const [source, bak] of activeBackups) {
+    try {
+      copyFileSync(bak, source);
+      rmSync(bak, { force: true });
+    } catch {
+      // best-effort restore
+    }
+  }
+  activeBackups.clear();
+  process.off("SIGINT", restoreAllOnSignal);
+  process.off("SIGTERM", restoreAllOnSignal);
+  signalHandlersInstalled = false;
+  // Never call process.exit ourselves — re-raise so the host's own signal
+  // handling (or the default action) runs.
+  process.kill(process.pid, sig);
+}
+
+function trackBackup(source: string, bak: string): void {
+  activeBackups.set(source, bak);
+  if (signalHandlersInstalled) return;
+  signalHandlersInstalled = true;
+  process.on("SIGINT", restoreAllOnSignal);
+  process.on("SIGTERM", restoreAllOnSignal);
+}
+
+function untrackBackup(source: string): void {
+  activeBackups.delete(source);
+  if (activeBackups.size > 0 || !signalHandlersInstalled) return;
+  process.off("SIGINT", restoreAllOnSignal);
+  process.off("SIGTERM", restoreAllOnSignal);
+  signalHandlersInstalled = false;
+}
+
 /** Outcome symbols for streamed progress lines */
 const SYMBOLS: Record<MutantResult["outcome"], string> = {
   killed: "✓",
@@ -40,14 +83,45 @@ function applyMutation(source: string, mutation: Mutation): ApplyResult {
   return { ok: true, content };
 }
 
-async function checkPythonSyntax(filePath: string): Promise<boolean> {
-  for (const bin of ["python3", "python"]) {
+/**
+ * Candidate Python interpreter argv-prefixes to try for a `-c` syntax check,
+ * in priority order, derived from the test command when possible. A project
+ * that runs tests via `uv run pytest` or a venv `pytest` may have no bare
+ * `python`/`python3` on PATH, so prefer the interpreter implied by the command.
+ */
+function pythonInterpreterCandidates(command?: string): string[][] {
+  const candidates: string[][] = [];
+  if (command) {
+    const parts = command.trim().split(/\s+/);
+    const bin = parts[0];
+    const base = path.basename(bin);
+    if (base.startsWith("python")) {
+      candidates.push([bin]);
+    } else if (base === "uv" && parts[1] === "run") {
+      candidates.push(["uv", "run", "python"]);
+    } else if (base === "pytest" || base.endsWith("-pytest")) {
+      // e.g. ".venv/bin/pytest" → sibling interpreter ".venv/bin/python3"
+      const dir = path.dirname(bin);
+      if (dir && dir !== ".") {
+        candidates.push([path.join(dir, "python3")], [path.join(dir, "python")]);
+      }
+    }
+  }
+  candidates.push(["python3"], ["python"]);
+  return candidates;
+}
+
+/**
+ * Best-effort Python syntax check. Returns false only when an interpreter is
+ * found AND the file fails to parse. When no interpreter is available at all we
+ * cannot verify — fail OPEN (return true) and let the test run decide, instead
+ * of misreporting every patch as a syntax error.
+ */
+async function checkPythonSyntax(filePath: string, command?: string): Promise<boolean> {
+  const script = `import ast; ast.parse(open(${JSON.stringify(filePath)}).read())`;
+  for (const prefix of pythonInterpreterCandidates(command)) {
     const { promise, resolve } = Promise.withResolvers<"ok" | "syntax_error" | "not_found">();
-    const child = spawn(
-      bin,
-      ["-c", `import ast; ast.parse(open(${JSON.stringify(filePath)}).read())`],
-      { stdio: "pipe" },
-    );
+    const child = spawn(prefix[0], [...prefix.slice(1), "-c", script], { stdio: "pipe" });
     child.on("error", (err: NodeJS.ErrnoException) => {
       resolve(err.code === "ENOENT" ? "not_found" : "syntax_error");
     });
@@ -55,22 +129,23 @@ async function checkPythonSyntax(filePath: string): Promise<boolean> {
 
     const result = await promise;
     if (result === "ok") return true;
-    if (result === "syntax_error") return false; // binary exists, file is invalid — stop
-    // "not_found": try next binary
+    if (result === "syntax_error") return false; // interpreter exists, file is invalid — stop
+    // "not_found": try the next candidate
   }
-  return false;
+  return true; // no interpreter available — cannot verify, fail open
 }
 
 async function checkGoSyntax(filePath: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const child = spawn("gofmt", ["-e", filePath], { stdio: "pipe" });
-    child.on("error", () => resolve(false));
+    // gofmt missing → cannot verify; fail open and let `go test` decide.
+    child.on("error", (err: NodeJS.ErrnoException) => resolve(err.code === "ENOENT"));
     child.on("close", (code) => resolve(code === 0));
   });
 }
 
-async function validateSyntax(filePath: string, language: "python" | "go"): Promise<boolean> {
-  return language === "python" ? checkPythonSyntax(filePath) : checkGoSyntax(filePath);
+function validateSyntax(filePath: string, language: "python" | "go", pythonCommand?: string): Promise<boolean> {
+  return language === "python" ? checkPythonSyntax(filePath, pythonCommand) : checkGoSyntax(filePath);
 }
 
 /**
@@ -79,7 +154,7 @@ async function validateSyntax(filePath: string, language: "python" | "go"): Prom
  * and restored in a finally block on all exit paths (success, abort, error).
  */
 export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult[]> {
-  const { sourcePath, language, mutations, testFiles, cwd, timeoutMs, signal, onUpdate, runner, checkEquivalence } = opts;
+  const { sourcePath, language, mutations, testFiles, cwd, timeoutMs, signal, onUpdate, runner, checkEquivalence, pythonCommand } = opts;
   const bakPath = sourcePath + ".pi-mutation-bak";
 
   if (inProgress[sourcePath]) {
@@ -87,25 +162,6 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
   }
 
   inProgress[sourcePath] = true;
-
-  // Safety net for catchable termination signals: restore the original file,
-  // remove our listeners, then re-raise so the host's own signal handling (or
-  // the default action) runs. We never call process.exit ourselves — doing so
-  // would hijack the host's shutdown. Cancellation of a normal run flows through
-  // the AbortSignal, not through these handlers.
-  const signalHandler = (sig: NodeJS.Signals): void => {
-    try {
-      copyFileSync(bakPath, sourcePath);
-      rmSync(bakPath, { force: true });
-    } catch {
-      // best-effort restore
-    }
-    process.off("SIGINT", signalHandler);
-    process.off("SIGTERM", signalHandler);
-    process.kill(process.pid, sig);
-  };
-  process.on("SIGINT", signalHandler);
-  process.on("SIGTERM", signalHandler);
 
   const results: MutantResult[] = [];
 
@@ -115,6 +171,7 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
     const originalSource = readFileSync(sourcePath, "utf8");
     // Create backup before touching the source file
     copyFileSync(sourcePath, bakPath);
+    trackBackup(sourcePath, bakPath);
 
     for (let i = 0; i < mutations.length; i++) {
       if (signal.aborted) break;
@@ -132,7 +189,7 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
       writeFileSync(sourcePath, applied.content, "utf8");
 
       // Syntax validation — skip test run if the patch produced invalid code
-      const syntaxOk = await validateSyntax(sourcePath, language);
+      const syntaxOk = await validateSyntax(sourcePath, language, pythonCommand);
       if (!syntaxOk) {
         copyFileSync(bakPath, sourcePath); // restore before next mutation
         results.push({ mutation, outcome: "invalid", note: "patch produced invalid syntax" });
@@ -212,8 +269,7 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
     } catch {
       // Best-effort cleanup
     }
-    process.removeListener("SIGINT", signalHandler);
-    process.removeListener("SIGTERM", signalHandler);
+    untrackBackup(sourcePath);
     delete inProgress[sourcePath];
   }
 

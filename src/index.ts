@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "fs";
 import * as path from "node:path";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import type { Context, TextContent } from "@oh-my-pi/pi-ai";
 import { resolveTarget } from "./target-resolver";
@@ -16,6 +16,10 @@ const DEFAULT_MAX_MUTATIONS: Record<"function" | "file", number> = {
   function: 10,
   file: 20,
 };
+
+// Absolute ceiling on retested prior mutants — scope/max_mutations are ignored
+// on the retest path, so this bounds a caller-supplied prior_mutants array.
+const MAX_RETEST_MUTANTS = DEFAULT_MAX_MUTATIONS.file * 2;
 
 // Omptype's Static<TSchema> resolves to unknown for JSON-schema (non-arktype) parameters.
 interface RunMutationTestsParams {
@@ -48,20 +52,24 @@ function extractText(content: unknown[]): string {
 
 // Emit an elapsed-time heartbeat while a long single-shot async step runs, so
 // the user gets steady feedback during the otherwise-silent LLM analysis call.
+// Uses the host's managed timer (ctx.setInterval / ctx.clearTimer): a throw from
+// the tick callback is contained by the host instead of escaping as a
+// process-fatal uncaughtException, and the handle is cleared on session teardown.
 async function withHeartbeat<T>(
+  timers: Pick<ExtensionContext, "setInterval" | "clearTimer">,
   tick: ((text: string) => void) | null,
   label: string,
   work: () => Promise<T>,
 ): Promise<T> {
   if (!tick) return work();
   const start = Date.now();
-  const timer = setInterval(() => {
+  const timer = timers.setInterval(() => {
     tick(`${label} — ${Math.round((Date.now() - start) / 1000)}s elapsed…`);
   }, 4000);
   try {
     return await work();
   } finally {
-    clearInterval(timer);
+    timers.clearTimer(timer);
   }
 }
 
@@ -151,12 +159,14 @@ with: mv <file>.pi-mutation-bak <file>`,
         };
       }
 
-      // FR-016: budget warning when caller raises cap above default
+      // FR-016: budget warning when caller raises cap above default. maxMutations
+      // is clamped to defaultCap*2, so report the effective count that will run.
       if (params.max_mutations !== undefined && params.max_mutations > defaultCap) {
+        const clamped = maxMutations < params.max_mutations ? ` (hard cap ${defaultCap * 2})` : "";
         onUpdate?.({
           content: [{
             type: "text" as const,
-            text: `⚠ max_mutations=${params.max_mutations} exceeds the default cap of ${defaultCap} for ${scope} scope — this run may be slow.`,
+            text: `⚠ max_mutations=${params.max_mutations} exceeds the default cap of ${defaultCap} for ${scope} scope — running ${maxMutations} mutation${maxMutations === 1 ? "" : "s"}${clamped}. This run may be slow.`,
           }],
         });
       }
@@ -167,18 +177,24 @@ with: mv <file>.pi-mutation-bak <file>`,
         return errorResult(resolved.message, { error: resolved.kind });
       }
 
+      // Symbol targets resolve to the first match in a deterministic walk;
+      // surface the resolution so an ambiguous symbol is not opaque.
+      if (resolved.symbol) {
+        onUpdate?.({ content: [{ type: "text" as const, text: `Resolved symbol "${resolved.symbol}" → ${path.relative(ctx.cwd, resolved.filePath)}` }] });
+      }
+
       // FR-013: discover test files (or use caller-supplied paths)
       let testFiles: string[];
       if (params.test_files && params.test_files.length > 0) {
-        const resolved_paths = params.test_files.map((f) => path.resolve(ctx.cwd, f));
-        const missing = resolved_paths.filter((p) => !existsSync(p));
+        const resolvedPaths = params.test_files.map((f) => path.resolve(ctx.cwd, f));
+        const missing = resolvedPaths.filter((p) => !existsSync(p));
         if (missing.length > 0) {
           return errorResult(
             `test_files: path(s) not found:\n${missing.map((p) => `  ${p}`).join("\n")}`,
             { error: "test_files_not_found", missing },
           );
         }
-        testFiles = resolved_paths;
+        testFiles = resolvedPaths;
       } else {
         const discovery = discoverTests(resolved, ctx.cwd);
         if (!Array.isArray(discovery)) {
@@ -206,13 +222,17 @@ with: mv <file>.pi-mutation-bak <file>`,
       // Shared LLM-call closure — drives both mutation generation and the
       // survivor equivalence judge. Null when the session has no active model.
       const model = ctx.models.current();
+      // Fetch the API key once per run (lazily, on first LLM call) and reuse it
+      // for every mutation-generation and equivalence-judge call.
+      let apiKeyPromise: Promise<string | undefined> | undefined;
       const llmCall = model
         ? async (prompt: string): Promise<string> => {
-            const apiKey = await ctx.modelRegistry.authStorage.getApiKey(
+            apiKeyPromise ??= ctx.modelRegistry.authStorage.getApiKey(
               model.provider,
               undefined,
               { modelId: model.id, signal },
             );
+            const apiKey = await apiKeyPromise;
             const context: Context = {
               messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
             };
@@ -229,9 +249,10 @@ with: mv <file>.pi-mutation-bak <file>`,
       let mutations: Mutation[];
 
       if (params.prior_mutants && params.prior_mutants.length > 0) {
-        mutations = params.prior_mutants;
+        mutations = params.prior_mutants.slice(0, MAX_RETEST_MUTANTS);
+        const capped = params.prior_mutants.length - mutations.length;
         onUpdate?.({
-          content: [{ type: "text" as const, text: `Retesting ${mutations.length} prior mutant${mutations.length === 1 ? "" : "s"} — skipping LLM analysis…` }],
+          content: [{ type: "text" as const, text: `Retesting ${mutations.length} prior mutant${mutations.length === 1 ? "" : "s"}${capped > 0 ? ` (capped from ${params.prior_mutants.length})` : ""} — skipping LLM analysis…` }],
         });
       } else {
         if (!llmCall) {
@@ -245,7 +266,7 @@ with: mv <file>.pi-mutation-bak <file>`,
         const label = `Analyzing ${resolved.filePath} — generating mutation plan`;
         tick?.(`${label} (this may take a moment)…`);
 
-        const generated = await withHeartbeat(tick, label, () =>
+        const generated = await withHeartbeat(ctx, tick, label, () =>
           analyzeAndGenerate({
             sourceCode,
             testCode,
@@ -294,6 +315,7 @@ with: mv <file>.pi-mutation-bak <file>`,
           runner,
           onUpdate: (msg) => onUpdate?.({ content: [{ type: "text" as const, text: msg }] }),
           checkEquivalence,
+          pythonCommand: resolved.language === "python" ? params.test_command : undefined,
         });
 
         // FR-008: build and return final result
