@@ -1,7 +1,7 @@
 import { describe, it, expect, mock, beforeEach } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { TestRunner } from "../types";
-import { pythonRunner, PythonNotFoundError } from "../runners/python";
+import { pythonRunner, makePythonRunner, PythonNotFoundError } from "../runners/python";
 import { goRunner, GoNotFoundError } from "../runners/go";
 import { getRunner, registerRunner } from "../runners/index";
 
@@ -143,7 +143,49 @@ describe("pythonRunner", () => {
 
     const pending = pythonRunner.runTests(baseOpts());
     await expect(pending).rejects.toBeInstanceOf(PythonNotFoundError);
-    await expect(pending).rejects.toThrow("pytest not found on $PATH");
+    await expect(pending).rejects.toThrow("test command not found on $PATH: pytest");
+  });
+});
+
+describe("makePythonRunner", () => {
+  it("uses a plain venv path as the binary with no prefix args", async () => {
+    const runner = makePythonRunner(".venv/bin/pytest");
+    const pending = runner.runTests(baseOpts());
+    lastChild().closeWith(0);
+    await pending;
+
+    const call = lastSpawnCall();
+    expect(call.command).toBe(".venv/bin/pytest");
+    expect(call.args).toEqual(["/repo/tests/test_foo.py", "--tb=short", "-q"]);
+  });
+
+  it("splits a multi-word command into binary and prefix args", async () => {
+    const runner = makePythonRunner("uv run pytest");
+    const pending = runner.runTests(baseOpts());
+    lastChild().closeWith(0);
+    await pending;
+
+    const call = lastSpawnCall();
+    expect(call.command).toBe("uv");
+    expect(call.args).toEqual(["run", "pytest", "/repo/tests/test_foo.py", "--tb=short", "-q"]);
+  });
+
+  it("throws PythonNotFoundError with the full command when binary is missing", async () => {
+    spawnError = Object.assign(new Error("spawn uv ENOENT"), { code: "ENOENT" });
+
+    const runner = makePythonRunner("uv run pytest");
+    const pending = runner.runTests(baseOpts());
+    await expect(pending).rejects.toBeInstanceOf(PythonNotFoundError);
+    await expect(pending).rejects.toThrow("test command not found on $PATH: uv run pytest");
+  });
+
+  it("defaults to pytest when called with no argument", async () => {
+    const runner = makePythonRunner();
+    const pending = runner.runTests(baseOpts());
+    lastChild().closeWith(0);
+    await pending;
+
+    expect(lastSpawnCall().command).toBe("pytest");
   });
 });
 
