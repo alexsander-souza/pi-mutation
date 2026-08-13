@@ -175,10 +175,15 @@ with: mv <file>.pi-mutation-bak <file>`,
         maxMutations,
         language: resolved.language,
         llmCall: async (prompt) => {
+          const apiKey = await ctx.modelRegistry.authStorage.getApiKey(
+            model.provider,
+            undefined,
+            { modelId: model.id, signal },
+          );
           const context: Context = {
             messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
           };
-          const response = await completeSimple(model, context);
+          const response = await completeSimple(model, context, { apiKey, signal });
           return extractText(response.content);
         },
       });
