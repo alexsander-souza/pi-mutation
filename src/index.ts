@@ -10,7 +10,7 @@ import { runMutations } from "./mutation-runner";
 import { buildResult } from "./result-builder";
 import { getRunner } from "./runners/index";
 import { makePythonRunner } from "./runners/python";
-import type { MutationRunResult } from "./types";
+import type { Mutation, MutationRunResult } from "./types";
 
 const DEFAULT_MAX_MUTATIONS: Record<"function" | "file", number> = {
   function: 10,
@@ -18,7 +18,6 @@ const DEFAULT_MAX_MUTATIONS: Record<"function" | "file", number> = {
 };
 
 // Omptype's Static<TSchema> resolves to unknown for JSON-schema (non-arktype) parameters.
-// The zod schema above is the authoritative runtime contract; this type matches it exactly.
 interface RunMutationTestsParams {
   target: string;
   scope?: "function" | "file";
@@ -26,6 +25,7 @@ interface RunMutationTestsParams {
   timeout_ms?: number;
   test_files?: string[];
   test_command?: string;
+  prior_mutants?: Mutation[];
 }
 
 function errorResult(message: string, details: Record<string, unknown>) {
@@ -84,6 +84,19 @@ with: mv <file>.pi-mutation-bak <file>`,
         "binary, the rest are prepended as arguments before the test files. " +
         "Examples: '.venv/bin/pytest', 'uv run pytest', 'python -m pytest'. " +
         "Defaults to 'pytest'. Consult AGENTS.md or the project README to find the correct invocation.",
+      ),
+      prior_mutants: z.array(z.object({
+        id: z.string(),
+        description: z.string(),
+        hotspot: z.string(),
+        replacement: z.string(),
+        explanation: z.string(),
+        suggestion: z.string(),
+      })).optional().describe(
+        "Surviving mutants from a previous run (pass details.mutants filtered to outcome='surviving'). " +
+        "When provided the LLM analysis step is skipped and these exact mutations are retested — " +
+        "use this after adding tests to prove the gaps are closed. " +
+        "scope and max_mutations are ignored when prior_mutants is supplied.",
       ),
     }),
 
@@ -169,51 +182,62 @@ with: mv <file>.pi-mutation-bak <file>`,
         );
       }
 
-      // Read source and test file contents for LLM analysis
-      const sourceCode = readFileSync(resolved.filePath, "utf8");
-      const testCode = testFiles.map((f) => readFileSync(f, "utf8")).join("\n\n");
+      // FR-003 / FR-004 / FR-015: hotspot analysis + mutation generation,
+      // OR retest prior survivors without calling the LLM.
+      let mutations: Mutation[];
 
-      // FR-003 / FR-004 / FR-015: hotspot analysis + mutation generation
-      const model = ctx.models.current();
-      if (!model) {
-        return errorResult("No active model in this session. Cannot run mutation analysis.", { error: "no_model" });
-      }
+      if (params.prior_mutants && params.prior_mutants.length > 0) {
+        mutations = params.prior_mutants;
+        onUpdate?.({
+          content: [{ type: "text" as const, text: `Retesting ${mutations.length} prior mutant${mutations.length === 1 ? "" : "s"} — skipping LLM analysis…` }],
+        });
+      } else {
+        // Read source and test file contents for LLM analysis
+        const sourceCode = readFileSync(resolved.filePath, "utf8");
+        const testCode = testFiles.map((f) => readFileSync(f, "utf8")).join("\n\n");
 
-      onUpdate?.({
-        content: [{ type: "text" as const, text: `Analyzing ${resolved.filePath} — generating mutation plan (this may take a moment)…` }],
-      });
+        const model = ctx.models.current();
+        if (!model) {
+          return errorResult("No active model in this session. Cannot run mutation analysis.", { error: "no_model" });
+        }
 
-      const mutations = await analyzeAndGenerate({
-        sourceCode,
-        testCode,
-        target: params.target,
-        scope,
-        maxMutations,
-        language: resolved.language,
-        llmCall: async (prompt) => {
-          const apiKey = await ctx.modelRegistry.authStorage.getApiKey(
-            model.provider,
-            undefined,
-            { modelId: model.id, signal },
+        onUpdate?.({
+          content: [{ type: "text" as const, text: `Analyzing ${resolved.filePath} — generating mutation plan (this may take a moment)…` }],
+        });
+
+        const generated = await analyzeAndGenerate({
+          sourceCode,
+          testCode,
+          target: params.target,
+          scope,
+          maxMutations,
+          language: resolved.language,
+          llmCall: async (prompt) => {
+            const apiKey = await ctx.modelRegistry.authStorage.getApiKey(
+              model.provider,
+              undefined,
+              { modelId: model.id, signal },
+            );
+            const context: Context = {
+              messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+            };
+            const response = await completeSimple(model, context, { apiKey, signal });
+            return extractText(response.content);
+          },
+        });
+
+        if (!Array.isArray(generated)) {
+          return errorResult(
+            `Failed to parse mutation plan from LLM response. Try a narrower scope or a smaller target. (${generated.message})`,
+            { error: generated.kind },
           );
-          const context: Context = {
-            messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-          };
-          const response = await completeSimple(model, context, { apiKey, signal });
-          return extractText(response.content);
-        },
-      });
+        }
 
-      if (!Array.isArray(mutations)) {
-        return errorResult(
-          `Failed to parse mutation plan from LLM response. Try a narrower scope or a smaller target. (${mutations.message})`,
-          { error: mutations.kind },
-        );
+        mutations = generated;
+        onUpdate?.({
+          content: [{ type: "text" as const, text: `Generated ${mutations.length} mutation${mutations.length === 1 ? "" : "s"} — running test suite for each…` }],
+        });
       }
-
-      onUpdate?.({
-        content: [{ type: "text" as const, text: `Generated ${mutations.length} mutation${mutations.length === 1 ? "" : "s"} — running test suite for each…` }],
-      });
 
       // FR-005–FR-009, FR-012, FR-014: execute mutations and build result.
       // runMutations may throw on the concurrent-run guard, a missing test

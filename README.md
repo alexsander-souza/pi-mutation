@@ -21,6 +21,10 @@ suggestions for missing tests.
   never executed.
 - **Native test runners** — Python (`pytest`) and Go (`go test`); no external
   mutation tool required.
+- **Flexible Python invocation** — specify any command for the test runner:
+  venv path, `uv run pytest`, `python -m pytest`, etc.
+- **Retest survivors** — pass surviving mutants from a prior run to skip LLM
+  analysis and prove new tests close the gaps.
 - **Pluggable runner architecture** — add a language by implementing a runner,
   without touching the LLM analysis layer.
 - **Streaming results** — per-mutant progress emitted as each test run completes,
@@ -71,13 +75,34 @@ The plugin registers a single LLM-callable tool, `run_mutation_tests`.
 | Parameter       | Type                     | Default                          | Description |
 |-----------------|--------------------------|----------------------------------|-------------|
 | `target`        | `string`                 | —                                | File path (e.g. `src/utils.py`) or function/symbol name (e.g. `calculate_total`). Language is auto-detected from the file extension. |
-| `scope`         | `"function" \| "file"`   | `"function"`                     | Analyze the named function only, or all functions in the file. |
-| `max_mutations` | `number`                 | `10` (function) / `20` (file)    | Maximum mutations to run. Capped at twice the default. |
+| `scope`         | `"function" \| "file"`   | `"function"`                     | Analyze the named function only, or all functions in the file. Ignored when `prior_mutants` is supplied. |
+| `max_mutations` | `number`                 | `10` (function) / `20` (file)    | Maximum mutations to run. Capped at twice the default. Ignored when `prior_mutants` is supplied. |
 | `timeout_ms`    | `number`                 | `60000`                          | Per-mutation subprocess timeout in milliseconds. |
+| `test_files`    | `string[]`               | auto-discovered                  | Explicit test file paths; skips auto-discovery. Resolved relative to the working directory. |
+| `test_command`  | `string`                 | `"pytest"`                       | Command used to invoke the Python test suite. The first whitespace-delimited token is the binary; the rest are prepended before the test files. Examples: `.venv/bin/pytest`, `uv run pytest`, `python -m pytest`. Consult `AGENTS.md` or the project README to find the correct invocation. |
+| `prior_mutants` | `Mutation[]`             | —                                | Surviving mutants from a previous run. When supplied, the LLM analysis step is skipped entirely and these exact mutations are retested against the current test suite. |
 
 The tool returns a structured result: total mutations, counts of killed / surviving /
 invalid / timed-out mutants, the overall mutation score, the surviving mutant list,
 and test-improvement suggestions.
+
+### Retesting survivors
+
+After adding tests to close a gap, pass the surviving mutants back to confirm they
+are now killed — without generating a new (potentially different) mutation plan:
+
+```
+# first run — discover gaps
+run_mutation_tests(target="src/calc.py")
+→ details.mutants includes survivors
+
+# add tests, then verify the same mutants are now killed
+run_mutation_tests(
+  target="src/calc.py",
+  prior_mutants=<survivors from details.mutants filtered to outcome="surviving">
+)
+→ "Retesting 3 prior mutants — skipping LLM analysis…"
+```
 
 ### Bundled skill
 
