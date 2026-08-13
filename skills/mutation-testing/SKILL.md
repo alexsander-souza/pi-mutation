@@ -41,12 +41,19 @@ write some first, then run.
 
 The tool returns a mutation score and a structured `details` object:
 
-- **score** = killed / (killed + surviving). `invalid` and `timeout` mutants are
-  excluded from the denominator, so report tested-vs-total honestly, not just the %.
+- **score** = killed / (killed + surviving). `invalid`, `timeout`, and
+  `equivalent` mutants are excluded from the denominator, so report tested-vs-
+  total honestly, not just the %.
 - **surviving** mutants are the payload. Each carries `description` (what changed),
   `explanation` (why no test caught it), and `suggestion` (a concrete test to add).
-- `invalid` = the patch didn't apply/parse (skipped, not a test gap).
-  `timeout` = the suite hung on that mutant; consider raising `timeout_ms`.
+  Mutations are patches: `original` (snippet replaced) → `mutated` (its replacement).
+- **equivalent** mutants are survivors the tool judged semantically identical to
+  the original — unkillable by any test. They are excluded from the score and
+  from the surviving list. Do NOT try to write tests for them; acknowledge them
+  and move on.
+- `invalid` = the patch didn't match/apply or produced invalid syntax (skipped,
+  not a test gap). `timeout` = the suite hung on that mutant; consider raising
+  `timeout_ms`.
 - Score 100% with a low tested count is weak evidence, not a clean bill — note it.
 
 ## Act on survivors — don't just report
@@ -56,12 +63,13 @@ A run is not done when you print the score. For each surviving mutant:
 1. Read its `explanation` to understand the untested behavior.
 2. Write the test from its `suggestion`, in the project's existing test style and
    file — adapt it, don't paste verbatim.
-3. Rerun `run_mutation_tests` on the same target and confirm the mutant is now
-   killed and the score rose.
+3. Rerun `run_mutation_tests` on the same target (or pass the survivors as
+   `prior_mutants`) and confirm the mutant is now killed and the score rose.
 
-Loop until survivors are gone or a remaining survivor is a known
-equivalent/acceptable mutant — call those out explicitly rather than silently
-leaving them.
+Loop until survivors are gone. The loop is guaranteed to terminate: each round a
+survivor is either killed by your new test or reclassified as `equivalent` and
+dropped from the surviving set — so the survivor list strictly shrinks. Never
+retest mutants already reported as `equivalent`; call them out explicitly and stop.
 
 ## Recovery
 

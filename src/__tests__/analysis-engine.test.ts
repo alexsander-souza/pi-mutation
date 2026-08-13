@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { type AnalysisOpts, analyzeAndGenerate } from "../analysis-engine";
+import { type AnalysisOpts, analyzeAndGenerate, judgeEquivalence } from "../analysis-engine";
 import type { AnalysisError, Mutation } from "../types";
 
 function makeOpts(
@@ -27,7 +27,8 @@ function makeItem(index: number): Mutation {
 		id: `m${String(index + 1).padStart(3, "0")}`,
 		description: `mutation ${index + 1}`,
 		hotspot: `line ${index + 1}`,
-		replacement: `def add(a, b):\n    return a - b  # mutant ${index + 1}`,
+		original: `return a + b`,
+		mutated: `return a - b  # mutant ${index + 1}`,
 		explanation: `reason ${index + 1}`,
 		suggestion: `def test_add_${index + 1}(): assert add(1, 2) == 3`,
 	};
@@ -102,16 +103,17 @@ describe("analyzeAndGenerate", () => {
 		expect(result).toEqual([]);
 	});
 
-	it("drops items missing the replacement field", async () => {
+	it("drops items missing the mutated field", async () => {
 		const valid = makeItem(0);
-		const missingReplacement = {
+		const missingMutated = {
 			id: "m002",
-			description: "no replacement here",
+			description: "no mutated snippet here",
 			hotspot: "line 2",
+			original: "return a + b",
 			explanation: "dropped",
 		};
 		const result = await analyzeAndGenerate(
-			makeOpts(async () => JSON.stringify([valid, missingReplacement])),
+			makeOpts(async () => JSON.stringify([valid, missingMutated])),
 		);
 		expect(isError(result)).toBe(false);
 		if (isError(result)) return;
@@ -164,5 +166,73 @@ describe("analyzeAndGenerate", () => {
 		expect(captured).toContain("5");
 		expect(captured).toContain("pytest");
 		expect(captured).toContain("suggestion");
+	});
+});
+
+const mutation: Mutation = {
+	id: "m001",
+	description: "swap operands",
+	hotspot: "line 2",
+	original: "return a + b",
+	mutated: "return b + a",
+	explanation: "commutative",
+	suggestion: "assert add(1, 2) == 3",
+};
+
+describe("judgeEquivalence", () => {
+	it("returns the verdict for a well-formed equivalent response", async () => {
+		const verdict = await judgeEquivalence({
+			mutation,
+			language: "python",
+			llmCall: async () => JSON.stringify({ equivalent: true, rationale: "commutative" }),
+		});
+		expect(verdict).toEqual({ equivalent: true, rationale: "commutative" });
+	});
+
+	it("returns equivalent:false with rationale", async () => {
+		const verdict = await judgeEquivalence({
+			mutation,
+			language: "python",
+			llmCall: async () => `{"equivalent": false, "rationale": "differs"}`,
+		});
+		expect(verdict?.equivalent).toBe(false);
+	});
+
+	it("parses a verdict wrapped in a markdown fence", async () => {
+		const verdict = await judgeEquivalence({
+			mutation,
+			language: "python",
+			llmCall: async () => "```json\n{\"equivalent\": true, \"rationale\": \"x\"}\n```",
+		});
+		expect(verdict?.equivalent).toBe(true);
+	});
+
+	it("returns null when the response is not valid JSON", async () => {
+		const verdict = await judgeEquivalence({
+			mutation,
+			language: "python",
+			llmCall: async () => "I think it is equivalent",
+		});
+		expect(verdict).toBeNull();
+	});
+
+	it("returns null when 'equivalent' is missing or non-boolean", async () => {
+		const verdict = await judgeEquivalence({
+			mutation,
+			language: "python",
+			llmCall: async () => JSON.stringify({ rationale: "no verdict" }),
+		});
+		expect(verdict).toBeNull();
+	});
+
+	it("returns null when llmCall rejects", async () => {
+		const verdict = await judgeEquivalence({
+			mutation,
+			language: "python",
+			llmCall: async () => {
+				throw new Error("provider down");
+			},
+		});
+		expect(verdict).toBeNull();
 	});
 });

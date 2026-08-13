@@ -6,20 +6,43 @@ export interface Mutation {
   description: string;
   /** what code location this targets */
   hotspot: string;
-  /** full mutated function/file body — replaces the original entirely */
-  replacement: string;
+  /**
+   * exact snippet copied verbatim from the original source that this mutation
+   * replaces. Must appear in the source exactly once. A minimal anchor (an
+   * expression, statement, or a few contiguous lines) — never the whole body,
+   * which keeps LLM output small.
+   */
+  original: string;
+  /** snippet substituted for `original` — the semantic change */
+  mutated: string;
   /** why this mutation is likely to survive without a specific test */
   explanation: string;
   /** concrete test to add that would kill this mutant, using the framework's idioms */
   suggestion: string;
 }
 
+/** Verdict from the semantic-equivalence judge for a surviving mutant */
+export interface EquivalenceVerdict {
+  /** true when the mutant produces identical observable behavior for all inputs */
+  equivalent: boolean;
+  /** one-sentence rationale for the verdict */
+  rationale: string;
+}
+
 /** Per-mutant outcome after execution */
 export interface MutantResult {
   mutation: Mutation;
-  outcome: "killed" | "surviving" | "invalid" | "timeout";
+  /**
+   * killed — a test failed; surviving — tests passed, real gap;
+   * invalid — patch did not apply or produced invalid syntax;
+   * timeout — the suite hung; equivalent — survivor judged semantically
+   * equivalent to the original, so unkillable (excluded from the score).
+   */
+  outcome: "killed" | "surviving" | "invalid" | "timeout" | "equivalent";
   /** stderr/stdout excerpt on kill; undefined otherwise */
   testOutput?: string;
+  /** reason for an invalid patch, or the rationale for an equivalence verdict */
+  note?: string;
 }
 
 /** Final structured result returned in tool result details */
@@ -33,10 +56,12 @@ export interface MutationRunResult {
   surviving: number;
   invalid: number;
   timeout: number;
+  /** survivors judged semantically equivalent — unkillable, excluded from score */
+  equivalent: number;
   /** killed / (killed + surviving) * 100; null when no mutants were tested */
   score: number | null;
   mutants: MutantResult[];
-  /** one suggestion per surviving mutant */
+  /** one suggestion per surviving (non-equivalent) mutant */
   suggestions: string[];
 }
 
@@ -112,4 +137,11 @@ export interface RunMutationsOpts {
   onUpdate?: (msg: string) => void;
   /** Resolved runner — caller resolves from RunnerRegistry before calling */
   runner: TestRunner;
+  /**
+   * Optional semantic-equivalence judge. When a mutant survives, this is called
+   * with the mutation; a truthy `equivalent` verdict reclassifies it as
+   * `equivalent` (unkillable) so it is excluded from the score and never
+   * resurfaced for retesting. Return null to leave the survivor as-is.
+   */
+  checkEquivalence?: (mutation: Mutation) => Promise<EquivalenceVerdict | null>;
 }

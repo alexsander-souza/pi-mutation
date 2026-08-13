@@ -1,4 +1,4 @@
-import { copyFileSync, rmSync, writeFileSync } from "fs";
+import { copyFileSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { spawn } from "child_process";
 import path from "path";
 import type { Mutation, MutantResult, RunMutationsOpts } from "./types";
@@ -12,7 +12,33 @@ const SYMBOLS: Record<MutantResult["outcome"], string> = {
   surviving: "✗",
   invalid: "~",
   timeout: "⏱",
+  equivalent: "≡",
 };
+
+type ApplyResult =
+  | { ok: true; content: string }
+  | { ok: false; reason: string };
+
+/**
+ * Apply a search/replace mutation against the pristine source. The mutation's
+ * `original` anchor must occur exactly once, keeping the patch unambiguous.
+ * A miss, ambiguity, or no-op is reported so the caller marks it `invalid`.
+ */
+function applyMutation(source: string, mutation: Mutation): ApplyResult {
+  if (mutation.original === mutation.mutated) {
+    return { ok: false, reason: "no-op patch (original == mutated)" };
+  }
+  const first = source.indexOf(mutation.original);
+  if (first === -1) {
+    return { ok: false, reason: "original snippet not found in source" };
+  }
+  if (source.indexOf(mutation.original, first + 1) !== -1) {
+    return { ok: false, reason: "original snippet is ambiguous (matches multiple locations)" };
+  }
+  const content =
+    source.slice(0, first) + mutation.mutated + source.slice(first + mutation.original.length);
+  return { ok: true, content };
+}
 
 async function checkPythonSyntax(filePath: string): Promise<boolean> {
   for (const bin of ["python3", "python"]) {
@@ -53,7 +79,7 @@ async function validateSyntax(filePath: string, language: "python" | "go"): Prom
  * and restored in a finally block on all exit paths (success, abort, error).
  */
 export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult[]> {
-  const { sourcePath, language, mutations, testFiles, cwd, timeoutMs, signal, onUpdate, runner } = opts;
+  const { sourcePath, language, mutations, testFiles, cwd, timeoutMs, signal, onUpdate, runner, checkEquivalence } = opts;
   const bakPath = sourcePath + ".pi-mutation-bak";
 
   if (inProgress[sourcePath]) {
@@ -84,6 +110,9 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
   const results: MutantResult[] = [];
 
   try {
+    // Snapshot the pristine source once; every patch applies against this,
+    // never against an already-mutated file.
+    const originalSource = readFileSync(sourcePath, "utf8");
     // Create backup before touching the source file
     copyFileSync(sourcePath, bakPath);
 
@@ -93,20 +122,28 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
       const mutation = mutations[i];
       const n = `${i + 1}/${mutations.length}`;
 
-      // Write mutation in-place
-      writeFileSync(sourcePath, mutation.replacement, "utf8");
+      // Apply the search/replace patch against the pristine source
+      const applied = applyMutation(originalSource, mutation);
+      if (!applied.ok) {
+        results.push({ mutation, outcome: "invalid", note: applied.reason });
+        onUpdate?.(`${SYMBOLS.invalid} mutant ${n} — "${mutation.description}" — invalid: ${applied.reason}`);
+        continue;
+      }
+      writeFileSync(sourcePath, applied.content, "utf8");
 
-      // Syntax validation — skip test run if invalid
+      // Syntax validation — skip test run if the patch produced invalid code
       const syntaxOk = await validateSyntax(sourcePath, language);
       if (!syntaxOk) {
         copyFileSync(bakPath, sourcePath); // restore before next mutation
-        const result: MutantResult = { mutation, outcome: "invalid" };
-        results.push(result);
-        onUpdate?.(`${SYMBOLS.invalid} mutant ${n} — "${mutation.description}" — invalid syntax, skipped`);
+        results.push({ mutation, outcome: "invalid", note: "patch produced invalid syntax" });
+        onUpdate?.(`${SYMBOLS.invalid} mutant ${n} — "${mutation.description}" — invalid: syntax error after patch`);
         continue;
       }
 
-      // Run tests
+      // FR-progress: announce the test run before the (potentially slow) suite
+      // so the user is not left without feedback while it executes.
+      onUpdate?.(`▶ mutant ${n} — "${mutation.description}" — running tests…`);
+
       let outcome: MutantResult["outcome"];
       let testOutput: string | undefined;
 
@@ -135,8 +172,21 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
       // Restore original before next mutation
       copyFileSync(bakPath, sourcePath);
 
-      const result: MutantResult = { mutation, outcome, testOutput };
-      results.push(result);
+      // Equivalence gate: a survivor may be semantically equivalent to the
+      // original (unkillable). Reclassify it so it is excluded from the score
+      // and never resurfaced for retesting — this is what lets the fix-and-
+      // retest loop terminate instead of chasing an unkillable mutant forever.
+      let note: string | undefined;
+      if (outcome === "surviving" && checkEquivalence && !signal.aborted) {
+        onUpdate?.(`? mutant ${n} — "${mutation.description}" — checking equivalence…`);
+        const verdict = await checkEquivalence(mutation);
+        if (verdict?.equivalent) {
+          outcome = "equivalent";
+          note = verdict.rationale;
+        }
+      }
+
+      results.push({ mutation, outcome, testOutput, note });
 
       const label =
         outcome === "killed"
@@ -145,7 +195,9 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
             ? "survived"
             : outcome === "timeout"
               ? "timed out"
-              : "invalid";
+              : outcome === "equivalent"
+                ? "equivalent (unkillable, excluded)"
+                : "invalid";
       onUpdate?.(`${SYMBOLS[outcome]} mutant ${n} — "${mutation.description}" — ${label}`);
     }
   } finally {

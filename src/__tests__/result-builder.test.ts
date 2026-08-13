@@ -7,7 +7,8 @@ function makeMutation(id: string, over: Partial<Mutation> = {}): Mutation {
     id,
     description: `mutation ${id} description`,
     hotspot: `hotspot-${id}`,
-    replacement: `replacement-${id}`,
+    original: `original-${id}`,
+    mutated: `mutated-${id}`,
     explanation: `explanation-${id}`,
     suggestion: `suggestion-${id}`,
     ...over,
@@ -141,8 +142,30 @@ describe("buildResult", () => {
     expect(content).toContain("Mutation testing complete — 2/4 mutants tested");
     expect(details.score).toBe(50);
     expect(content).toContain(
-      "Score: 50% (1 killed / 1 surviving / 1 invalid / 1 timeout)",
+      "Score: 50% (1 killed / 1 surviving / 1 invalid / 1 timeout / 0 equivalent)",
     );
     expect(content).toContain("Target: src/foo.py (python, function scope)");
+  });
+
+  it("excludes equivalent mutants from score, suggestions, and surviving list", () => {
+    const equiv: MutantResult = {
+      mutation: makeMutation("e1"),
+      outcome: "equivalent",
+      note: "commutative reorder",
+    };
+    const mutants: MutantResult[] = [
+      makeMutant("k1", "killed"),
+      makeMutant("s1", "surviving"),
+      equiv,
+    ];
+
+    const { content, details } = buildResult({ ...baseOpts, mutants });
+
+    // equivalent excluded from denominator: 1 killed / (1 killed + 1 surviving) = 50
+    expect(details.score).toBe(50);
+    expect(details.equivalent).toBe(1);
+    expect(details.suggestions).toEqual(["suggestion-s1"]);
+    expect(content).toContain("Equivalent mutants");
+    expect(content).toContain("commutative reorder");
   });
 });
