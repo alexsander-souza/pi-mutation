@@ -9,6 +9,7 @@ import { analyzeAndGenerate } from "./analysis-engine";
 import { runMutations } from "./mutation-runner";
 import { buildResult } from "./result-builder";
 import { getRunner } from "./runners/index";
+import { makePythonRunner } from "./runners/python";
 import type { MutationRunResult } from "./types";
 
 const DEFAULT_MAX_MUTATIONS: Record<"function" | "file", number> = {
@@ -24,6 +25,7 @@ interface RunMutationTestsParams {
   max_mutations?: number;
   timeout_ms?: number;
   test_files?: string[];
+  test_command?: string;
 }
 
 function errorResult(message: string, details: Record<string, unknown>) {
@@ -76,6 +78,12 @@ with: mv <file>.pi-mutation-bak <file>`,
       ),
       test_files: z.array(z.string()).optional().describe(
         "Explicit test file paths. Skips auto-discovery. Paths are resolved relative to the working directory.",
+      ),
+      test_command: z.string().optional().describe(
+        "Command used to invoke the Python test suite. Whitespace-separated: the first token is the " +
+        "binary, the rest are prepended as arguments before the test files. " +
+        "Examples: '.venv/bin/pytest', 'uv run pytest', 'python -m pytest'. " +
+        "Defaults to 'pytest'. Consult AGENTS.md or the project README to find the correct invocation.",
       ),
     }),
 
@@ -148,8 +156,12 @@ with: mv <file>.pi-mutation-bak <file>`,
         testFiles = discovery;
       }
 
-      // NFR-005: runner lookup (always present for python/go — defensive)
-      const runner = getRunner(resolved.language);
+      // NFR-005: runner lookup — Python uses a command-specific runner, Go uses the registry.
+      // test_command lets the caller specify a venv path or wrapper (e.g. "uv run pytest").
+      const runner =
+        resolved.language === "python"
+          ? makePythonRunner(params.test_command)
+          : getRunner(resolved.language);
       if (!runner) {
         return errorResult(
           `No test runner registered for language "${resolved.language}".`,
@@ -166,6 +178,10 @@ with: mv <file>.pi-mutation-bak <file>`,
       if (!model) {
         return errorResult("No active model in this session. Cannot run mutation analysis.", { error: "no_model" });
       }
+
+      onUpdate?.({
+        content: [{ type: "text" as const, text: `Analyzing ${resolved.filePath} — generating mutation plan (this may take a moment)…` }],
+      });
 
       const mutations = await analyzeAndGenerate({
         sourceCode,
@@ -194,6 +210,10 @@ with: mv <file>.pi-mutation-bak <file>`,
           { error: mutations.kind },
         );
       }
+
+      onUpdate?.({
+        content: [{ type: "text" as const, text: `Generated ${mutations.length} mutation${mutations.length === 1 ? "" : "s"} — running test suite for each…` }],
+      });
 
       // FR-005–FR-009, FR-012, FR-014: execute mutations and build result.
       // runMutations may throw on the concurrent-run guard, a missing test
