@@ -1,4 +1,5 @@
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
+import * as path from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import type { Context, TextContent } from "@oh-my-pi/pi-ai";
@@ -22,6 +23,7 @@ interface RunMutationTestsParams {
   scope?: "function" | "file";
   max_mutations?: number;
   timeout_ms?: number;
+  test_files?: string[];
 }
 
 function errorResult(message: string, details: Record<string, unknown>) {
@@ -72,6 +74,9 @@ with: mv <file>.pi-mutation-bak <file>`,
       timeout_ms: z.number().int().positive().optional().describe(
         "Per-mutation subprocess timeout in milliseconds. Default: 60000.",
       ),
+      test_files: z.array(z.string()).optional().describe(
+        "Explicit test file paths. Skips auto-discovery. Paths are resolved relative to the working directory.",
+      ),
     }),
 
     async execute(_id, rawParams, signal, onUpdate, ctx) {
@@ -120,13 +125,27 @@ with: mv <file>.pi-mutation-bak <file>`,
         return errorResult(resolved.message, { error: resolved.kind });
       }
 
-      // FR-013: discover test files
-      const testFiles = discoverTests(resolved);
-      if (!Array.isArray(testFiles)) {
-        return errorResult(
-          `No test files found for "${params.target}". Looked for:\n${testFiles.searchedPaths.map((p) => `  ${p}`).join("\n")}`,
-          { error: "no_tests_found", searchedPaths: testFiles.searchedPaths },
-        );
+      // FR-013: discover test files (or use caller-supplied paths)
+      let testFiles: string[];
+      if (params.test_files && params.test_files.length > 0) {
+        const resolved_paths = params.test_files.map((f) => path.resolve(ctx.cwd, f));
+        const missing = resolved_paths.filter((p) => !existsSync(p));
+        if (missing.length > 0) {
+          return errorResult(
+            `test_files: path(s) not found:\n${missing.map((p) => `  ${p}`).join("\n")}`,
+            { error: "test_files_not_found", missing },
+          );
+        }
+        testFiles = resolved_paths;
+      } else {
+        const discovery = discoverTests(resolved, ctx.cwd);
+        if (!Array.isArray(discovery)) {
+          return errorResult(
+            `No test files found for "${params.target}". Looked for:\n${discovery.searchedPaths.map((p) => `  ${p}`).join("\n")}`,
+            { error: "no_tests_found", searchedPaths: discovery.searchedPaths },
+          );
+        }
+        testFiles = discovery;
       }
 
       // NFR-005: runner lookup (always present for python/go — defensive)
