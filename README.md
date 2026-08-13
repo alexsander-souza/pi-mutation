@@ -79,6 +79,14 @@ The tool returns a structured result: total mutations, counts of killed / surviv
 invalid / timed-out mutants, the overall mutation score, the surviving mutant list,
 and test-improvement suggestions.
 
+### Bundled skill
+
+The package also ships a `mutation-testing` skill under `skills/`. OMP's
+`omp-plugins` provider discovers it automatically when the plugin is installed, so
+the assistant knows *when* to run mutation testing and drives the
+surviving-mutant → write-test loop rather than just reporting a score. It is
+model-selected by task context and also invocable with `/skill:mutation-testing`.
+
 ### Recovery
 
 Mutations are applied in place and the original file is backed up to
@@ -106,6 +114,7 @@ Project layout:
 - `src/mutation-runner.ts` — apply mutations, run tests, restore backups.
 - `src/result-builder.ts` — assemble the final structured result.
 - `src/runners/` — pluggable per-language test runners.
+- `skills/mutation-testing/SKILL.md` — bundled OMP workflow skill.
 
 ## License
 

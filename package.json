@@ -23,6 +23,11 @@
   "license": "MIT",
   "author": "Alexsander Silva de Souza <alexsander.desouza@gmail.com>",
   "type": "module",
+  "files": [
+    "src",
+    "!src/__tests__",
+    "skills"
+  ],
   "omp": {
     "extensions": ["./src/index.ts"]
   },
