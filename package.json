@@ -2,6 +2,26 @@
   "name": "pi-mutation",
   "version": "0.1.0",
   "description": "LLM-guided mutation testing plugin for Oh My Pi",
+  "keywords": [
+    "oh-my-pi",
+    "omp",
+    "omp-plugin",
+    "mutation-testing",
+    "llm",
+    "testing",
+    "pytest",
+    "go-test"
+  ],
+  "homepage": "https://github.com/alexsander-souza/pi-mutation#readme",
+  "bugs": {
+    "url": "https://github.com/alexsander-souza/pi-mutation/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alexsander-souza/pi-mutation.git"
+  },
+  "license": "MIT",
+  "author": "Alexsander Silva de Souza <alexsander.desouza@gmail.com>",
   "type": "module",
   "omp": {
     "extensions": ["./src/index.ts"]
