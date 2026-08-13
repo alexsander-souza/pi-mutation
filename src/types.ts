@@ -10,6 +10,8 @@ export interface Mutation {
   replacement: string;
   /** why this mutation is likely to survive without a specific test */
   explanation: string;
+  /** concrete test to add that would kill this mutant, using the framework's idioms */
+  suggestion: string;
 }
 
 /** Per-mutant outcome after execution */
@@ -45,7 +47,7 @@ export interface TestRunner {
    * Run the test suite against a mutated source file.
    * Returns killed=true if any test fails.
    * Must respect signal: kill child process and rethrow AbortError on abort.
-   * Must kill child process after timeoutMs and return killed=false, output="timeout".
+   * Must kill child process after timeoutMs and resolve with timedOut=true.
    */
   runTests(opts: {
     /** absolute path to the mutated source file */
@@ -58,7 +60,7 @@ export interface TestRunner {
     timeoutMs: number;
     /** abort signal from the tool execute call */
     signal: AbortSignal;
-  }): Promise<{ killed: boolean; output: string }>;
+  }): Promise<{ killed: boolean; output: string; timedOut?: boolean }>;
 }
 
 /** Runner registry entry — one per supported language */

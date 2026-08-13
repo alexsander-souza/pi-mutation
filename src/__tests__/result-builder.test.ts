@@ -9,6 +9,7 @@ function makeMutation(id: string, over: Partial<Mutation> = {}): Mutation {
     hotspot: `hotspot-${id}`,
     replacement: `replacement-${id}`,
     explanation: `explanation-${id}`,
+    suggestion: `suggestion-${id}`,
     ...over,
   };
 }
@@ -108,12 +109,8 @@ describe("buildResult", () => {
     const { details } = buildResult({ ...baseOpts, mutants });
 
     expect(details.suggestions).toHaveLength(2);
-    expect(details.suggestions[0]).toBe(
-      '→ Suggested test: based on "explanation-s1"',
-    );
-    expect(details.suggestions[1]).toBe(
-      '→ Suggested test: based on "explanation-s2"',
-    );
+    expect(details.suggestions[0]).toBe("suggestion-s1");
+    expect(details.suggestions[1]).toBe("suggestion-s2");
   });
 
   it("zero mutants → all counts 0, score null, Surviving mutants: none", () => {

@@ -10,6 +10,7 @@ export class PythonNotFoundError extends Error {
 interface RunResult {
   killed: boolean;
   output: string;
+  timedOut?: boolean;
 }
 
 export const pythonRunner: TestRunner = {
@@ -22,7 +23,7 @@ export const pythonRunner: TestRunner = {
 
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
-        finish({ killed: false, output: "timeout" });
+        finish({ killed: false, output: "timeout", timedOut: true });
       }, timeoutMs);
 
       const onAbort = (): void => {

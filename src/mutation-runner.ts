@@ -62,14 +62,21 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
 
   inProgress[sourcePath] = true;
 
-  // Register signal handler to restore backup on SIGINT/SIGTERM
-  const signalHandler = (): void => {
+  // Safety net for catchable termination signals: restore the original file,
+  // remove our listeners, then re-raise so the host's own signal handling (or
+  // the default action) runs. We never call process.exit ourselves — doing so
+  // would hijack the host's shutdown. Cancellation of a normal run flows through
+  // the AbortSignal, not through these handlers.
+  const signalHandler = (sig: NodeJS.Signals): void => {
     try {
       copyFileSync(bakPath, sourcePath);
       rmSync(bakPath, { force: true });
-    } finally {
-      process.exit(1);
+    } catch {
+      // best-effort restore
     }
+    process.off("SIGINT", signalHandler);
+    process.off("SIGTERM", signalHandler);
+    process.kill(process.pid, sig);
   };
   process.on("SIGINT", signalHandler);
   process.on("SIGTERM", signalHandler);
@@ -111,27 +118,24 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
           timeoutMs,
           signal,
         });
-        outcome = runResult.killed ? "killed" : "surviving";
-        if (runResult.killed) testOutput = runResult.output;
+        if (runResult.timedOut) {
+          outcome = "timeout";
+        } else {
+          outcome = runResult.killed ? "killed" : "surviving";
+          if (runResult.killed) testOutput = runResult.output;
+        }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
-          // Restore before re-throwing so finally block sees clean state
-          copyFileSync(bakPath, sourcePath);
-          break;
+          break; // finally restores the original
         }
-        // Unexpected runner error — treat as timeout
-        outcome = "timeout";
+        // Fatal (e.g. test runner not on PATH) — propagate; finally restores + cleans up
+        throw err;
       }
 
       // Restore original before next mutation
       copyFileSync(bakPath, sourcePath);
 
-      if (outcome! === "timeout" && testOutput === undefined) {
-        // Distinguish subprocess timeout from other errors
-        outcome = "timeout";
-      }
-
-      const result: MutantResult = { mutation, outcome: outcome!, testOutput };
+      const result: MutantResult = { mutation, outcome, testOutput };
       results.push(result);
 
       const label =
@@ -142,7 +146,7 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
             : outcome === "timeout"
               ? "timed out"
               : "invalid";
-      onUpdate?.(`${SYMBOLS[outcome!]} mutant ${n} — "${mutation.description}" — ${label}`);
+      onUpdate?.(`${SYMBOLS[outcome]} mutant ${n} — "${mutation.description}" — ${label}`);
     }
   } finally {
     // Always restore original and clean up backup

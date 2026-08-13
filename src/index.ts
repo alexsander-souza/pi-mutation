@@ -171,32 +171,43 @@ with: mv <file>.pi-mutation-bak <file>`,
         );
       }
 
-      // FR-005–FR-009, FR-012, FR-014: execute mutations
-      const mutants = await runMutations({
-        sourcePath: resolved.filePath,
-        language: resolved.language,
-        mutations,
-        testFiles,
-        cwd: ctx.cwd,
-        timeoutMs,
-        signal: signal ?? new AbortController().signal,
-        runner,
-        onUpdate: (msg) => onUpdate?.({ content: [{ type: "text" as const, text: msg }] }),
-      });
+      // FR-005–FR-009, FR-012, FR-014: execute mutations and build result.
+      // runMutations may throw on the concurrent-run guard, a missing test
+      // runner binary, or an unexpected runner failure — surface as a named
+      // error result, never thrown to the caller (conventions.md).
+      try {
+        const mutants = await runMutations({
+          sourcePath: resolved.filePath,
+          language: resolved.language,
+          mutations,
+          testFiles,
+          cwd: ctx.cwd,
+          timeoutMs,
+          signal: signal ?? new AbortController().signal,
+          runner,
+          onUpdate: (msg) => onUpdate?.({ content: [{ type: "text" as const, text: msg }] }),
+        });
 
-      // FR-008: build and return final result
-      const { content, details } = buildResult({
-        mutants,
-        cancelled: signal?.aborted ?? false,
-        target: params.target,
-        language: resolved.language,
-        scope,
-      });
+        // FR-008: build and return final result
+        const { content, details } = buildResult({
+          mutants,
+          cancelled: signal?.aborted ?? false,
+          target: params.target,
+          language: resolved.language,
+          scope,
+        });
 
-      return {
-        content: [{ type: "text" as const, text: content }],
-        details,
-      };
+        return {
+          content: [{ type: "text" as const, text: content }],
+          details,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return errorResult(
+          `Mutation run failed for "${params.target}": ${message}`,
+          { error: "run_failed" },
+        );
+      }
     },
   });
 }

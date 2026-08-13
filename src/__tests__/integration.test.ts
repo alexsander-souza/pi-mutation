@@ -32,7 +32,7 @@ async function binaryAvailable(bin: string, args: string[] = ["--version"]): Pro
 }
 
 function makeMutation(id: string, description: string, replacement: string): Mutation {
-  return { id, description, hotspot: "body", replacement, explanation: `explanation for ${id}` };
+  return { id, description, hotspot: "body", replacement, explanation: `explanation for ${id}`, suggestion: `test to kill ${id}` };
 }
 
 // ─── Python fixtures ──────────────────────────────────────────────────────────

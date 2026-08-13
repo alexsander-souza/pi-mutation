@@ -29,6 +29,7 @@ function makeItem(index: number): Mutation {
 		hotspot: `line ${index + 1}`,
 		replacement: `def add(a, b):\n    return a - b  # mutant ${index + 1}`,
 		explanation: `reason ${index + 1}`,
+		suggestion: `def test_add_${index + 1}(): assert add(1, 2) == 3`,
 	};
 }
 
@@ -161,5 +162,7 @@ describe("analyzeAndGenerate", () => {
 		expect(captured).toContain("return a + b");
 		expect(captured).toContain("assert add(1, 2) == 3");
 		expect(captured).toContain("5");
+		expect(captured).toContain("pytest");
+		expect(captured).toContain("suggestion");
 	});
 });

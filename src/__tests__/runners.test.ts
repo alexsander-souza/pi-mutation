@@ -122,7 +122,7 @@ describe("pythonRunner", () => {
     const pending = pythonRunner.runTests(baseOpts({ timeoutMs: 25 }));
     const child = lastChild();
 
-    expect(await pending).toEqual({ killed: false, output: "timeout" });
+    expect(await pending).toEqual({ killed: false, output: "timeout", timedOut: true });
     expect(child.killSignals).toContain("SIGKILL");
   });
 
@@ -183,7 +183,7 @@ describe("goRunner", () => {
     const pending = goRunner.runTests(baseOpts({ timeoutMs: 25 }));
     const child = lastChild();
 
-    expect(await pending).toEqual({ killed: false, output: "timeout" });
+    expect(await pending).toEqual({ killed: false, output: "timeout", timedOut: true });
     expect(child.killSignals).toContain("SIGKILL");
   });
 

@@ -22,6 +22,7 @@ const REQUIRED_STRING_FIELDS = [
 	"hotspot",
 	"replacement",
 	"explanation",
+	"suggestion",
 ] as const;
 
 function isMutationItem(item: unknown): item is Mutation {
@@ -44,6 +45,7 @@ function extractJson(response: string): string {
 
 function buildPrompt(opts: AnalysisOpts): string {
 	const unit = opts.scope === "function" ? "function" : "file";
+	const framework = opts.language === "python" ? "pytest" : "go test";
 	return `You are a mutation testing expert for ${opts.language}.
 
 Analyze the ${unit} \`${opts.target}\` and its test code below.
@@ -64,6 +66,7 @@ For each hotspot, produce a JSON object with exactly these fields:
 - "hotspot": the code location this mutation targets
 - "replacement": the FULL mutated ${unit} body, not a diff — it replaces the original entirely
 - "explanation": why this mutation is likely to survive without a specific test
+- "suggestion": a concrete ${framework} test to add that would kill this mutant, written using ${framework} idioms (name the test function and the assertion it makes)
 
 Respond with a JSON array only. No prose, no markdown fences.`;
 }
@@ -107,6 +110,7 @@ export async function analyzeAndGenerate(
 				hotspot: item.hotspot,
 				replacement: item.replacement,
 				explanation: item.explanation,
+				suggestion: item.suggestion,
 			});
 		}
 	}

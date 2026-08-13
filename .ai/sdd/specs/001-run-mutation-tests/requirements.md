@@ -6,7 +6,7 @@
 
 ## Overview
 
-`run_mutation_tests` is the core LLM-callable tool of pi-mutation. It drives the full mutation testing pipeline — LLM hotspot analysis, targeted mutation generation, patch application to temp copies, native test runner execution, and streaming progress — in a single tool call. It exists to give developers a fast, low-noise signal on whether their tests catch real bugs, without leaving the OMP session and without installing a dedicated mutation testing tool.
+`run_mutation_tests` is the core LLM-callable tool of pi-mutation. It drives the full mutation testing pipeline — LLM hotspot analysis, targeted mutation generation, in-place patch application to the source file (backed up and restored around each run), native test runner execution, and streaming progress — in a single tool call. It exists to give developers a fast, low-noise signal on whether their tests catch real bugs, without leaving the OMP session and without installing a dedicated mutation testing tool.
 
 ## Business Context
 
@@ -130,13 +130,13 @@ SO THAT run count stays bounded.
 ### FR-005: Patch validation — Must Have
 
 WHEN a mutation patch is generated  
-THE SYSTEM SHALL apply the patch to a temp copy of the source file and validate syntactic correctness before running tests  
-AND IF the patch is invalid, SHALL skip the test run and record the mutant as `invalid`  
-SO THAT invalid patches never corrupt the original source or produce misleading test results.
+THE SYSTEM SHALL back up the original source file, apply the patch in place, and validate syntactic correctness before running tests  
+AND IF the patch is invalid, SHALL skip the test run, restore the original from backup, and record the mutant as `invalid`  
+SO THAT invalid patches are never tested and the original source is always restored.
 
 ### FR-006: Test execution — Must Have
 
-WHEN a validated patch is applied to a temp copy  
+WHEN a validated patch has been applied in place  
 THE SYSTEM SHALL invoke the appropriate native test runner subprocess (`pytest` for Python, `go test` for Go) against the affected test files  
 AND SHALL record the mutant as `killed` if any test fails and `surviving` if all tests pass  
 SO THAT results reflect real test suite behavior.
@@ -172,11 +172,12 @@ THE SYSTEM SHALL detect the target language from file extension: `.py` → Pytho
 AND SHALL return an error result for any other extension  
 SO THAT the plugin fails clearly rather than guessing.
 
-### FR-012: Original file isolation — Must Have
+### FR-012: Original file backup and restore — Must Have
 
-THE SYSTEM SHALL apply all mutations to temp file copies  
-AND SHALL never modify the original source file  
-SO THAT the workspace is unchanged after the run.
+THE SYSTEM SHALL apply mutations in place to the original source file after first backing it up to `<file>.pi-mutation-bak`  
+AND SHALL restore the original from that backup after each mutant and on every exit path (success, invalid, timeout, abort, error)  
+AND SHALL remove the backup once the run completes normally  
+SO THAT the workspace is byte-identical to its pre-run state after the run.
 
 ### FR-013: Test file discovery — Should Have
 
@@ -219,8 +220,8 @@ SO THAT the user can abort early if needed.
 
 ### NFR-003: Security / Privacy
 
-- Original source files MUST NOT be modified under any circumstance.
-- Temp files MUST be written to a session-scoped temp directory and cleaned up after the run (or on abort).
+- Mutations are applied in place to the original source file; the file MUST be backed up to `<file>.pi-mutation-bak` before the first mutation and restored on every exit path (success, invalid, timeout, abort, error).
+- The backup filename MUST be greppable so a hard `SIGKILL` (uncatchable) leaves a recoverable copy; the backup MUST be removed after a normal run.
 - File paths passed to subprocess commands MUST be sanitized to prevent shell injection.
 - Source file contents MUST NOT be included in tool result `content` beyond what is necessary to describe the mutation.
 

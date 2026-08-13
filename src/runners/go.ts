@@ -10,6 +10,7 @@ export class GoNotFoundError extends Error {
 interface RunResult {
   killed: boolean;
   output: string;
+  timedOut?: boolean;
 }
 
 export const goRunner: TestRunner = {
@@ -22,7 +23,7 @@ export const goRunner: TestRunner = {
 
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
-        finish({ killed: false, output: "timeout" });
+        finish({ killed: false, output: "timeout", timedOut: true });
       }, timeoutMs);
 
       const onAbort = (): void => {

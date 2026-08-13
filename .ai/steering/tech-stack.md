@@ -49,7 +49,7 @@
 - MUST use `ctx.setInterval`/`ctx.setTimeout` for any background timers; never raw `setInterval`.
 - Tool `execute` functions MUST check `signal?.aborted` before long-running work.
 - Subprocess invocations MUST respect `signal` for cancellation.
-- MUST apply mutations to temp file copies; original source files MUST NOT be modified.
+- MUST apply mutations in place to the original source file, backed up to `<file>.pi-mutation-bak` and restored on every exit path (success, invalid, timeout, abort, error).
 - MUST validate patch syntactic correctness before running tests; skip invalid patches.
 - No external mutation tool dependency — only native test runners (pytest, go test).
 
@@ -65,7 +65,7 @@
 |----|----------|-----------|
 | TD-001 | LLM is the mutation engine | Avoids combinatorial explosion of traditional tools; generates semantically meaningful mutations only |
 | TD-002 | Pluggable runner interface | Python and Go first; new language support plugs in without touching tool definitions or the LLM analysis layer |
-| TD-003 | Temp-file mutation isolation | Original source files are never modified; each mutant applied to a fresh temp copy |
+| TD-003 | In-place mutation with backup/restore | Test runners must import the mutated module at its canonical path; original is backed up to `<file>.pi-mutation-bak` and restored on every exit path. Temp-dir isolation rejected as too fragile for Go module and multi-file Python resolution |
 
 ## Open Questions
 

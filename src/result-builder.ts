@@ -23,9 +23,7 @@ export function buildResult(opts: {
   const score = tested === 0 ? null : Math.round((killed / tested) * 100);
 
   const survivingMutants = mutants.filter((m) => m.outcome === "surviving");
-  const suggestions = survivingMutants.map(
-    (m) => `→ Suggested test: based on "${m.mutation.explanation}"`,
-  );
+  const suggestions = survivingMutants.map((m) => m.mutation.suggestion);
 
   const details: MutationRunResult = {
     cancelled,
@@ -87,7 +85,7 @@ function renderContent(
       lines.push(
         `  ${i + 1}. [${m.mutation.id}] ${m.mutation.description} — ${m.mutation.explanation}`,
       );
-      lines.push(`     → Suggested test: based on "${m.mutation.explanation}"`);
+      lines.push(`     → Suggested test: ${m.mutation.suggestion}`);
     });
   }
   lines.push("");

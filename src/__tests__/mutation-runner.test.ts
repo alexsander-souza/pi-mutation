@@ -9,7 +9,7 @@ import { runMutations } from "../mutation-runner";
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function makeMutation(id: string, replacement: string): Mutation {
-  return { id, description: `mutation ${id}`, hotspot: "line 1", replacement, explanation: `explanation for ${id}` };
+  return { id, description: `mutation ${id}`, hotspot: "line 1", replacement, explanation: `explanation for ${id}`, suggestion: `def test_${id}(): pass` };
 }
 
 function makeMockRunner(impl: TestRunner["runTests"]): TestRunner {
@@ -98,6 +98,25 @@ describe("runMutations", () => {
     });
 
     expect(results[0].outcome).toBe("surviving");
+    expect(results[0].testOutput).toBeUndefined();
+  });
+
+  it("records timeout outcome when runner reports timedOut", async () => {
+    if (!(await python3Available())) return;
+    const runner = makeMockRunner(async () => ({ killed: false, output: "timeout", timedOut: true }));
+
+    const results = await runMutations({
+      sourcePath,
+      language: "python",
+      mutations: [makeMutation("m001", "def add(a, b):\n    return a - b\n")],
+      testFiles: [],
+      cwd: dir,
+      timeoutMs: 5000,
+      signal: new AbortController().signal,
+      runner,
+    });
+
+    expect(results[0].outcome).toBe("timeout");
     expect(results[0].testOutput).toBeUndefined();
   });
 
