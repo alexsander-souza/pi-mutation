@@ -31,9 +31,15 @@ async function binaryAvailable(bin: string, args: string[] = ["--version"]): Pro
   return promise;
 }
 
-function makeMutation(id: string, description: string, replacement: string): Mutation {
-  return { id, description, hotspot: "body", replacement, explanation: `explanation for ${id}`, suggestion: `test to kill ${id}` };
+function makeMutation(id: string, description: string, original: string, mutated: string): Mutation {
+  return { id, description, hotspot: "body", original, mutated, explanation: `explanation for ${id}`, suggestion: `test to kill ${id}` };
 }
+
+// Patch pairs: [original snippet copied from the fixture, mutated replacement].
+const PY_KILLED = ['total += item["price"]', 'total -= item["price"]'] as const;
+const PY_SURVIVING = ["return total", "return total + 0"] as const;
+const PY_INVALID = ["def calculate_total(items):", "def calculate_total(items:"] as const;
+const GO_KILLED = ["total += p", "total -= p"] as const;
 
 // ─── Python fixtures ──────────────────────────────────────────────────────────
 
@@ -44,26 +50,6 @@ const PY_ORIGINAL = `def calculate_total(items):
     return total
 `;
 
-// Mutation: off-by-one / wrong operator — should be caught by a good test suite
-const PY_KILLED_REPLACEMENT = `def calculate_total(items):
-    total = 0
-    for item in items:
-        total -= item["price"]
-    return total
-`;
-
-// Mutation: remove loop (returns 0 always) — survives a suite that only tests empty input
-const PY_SURVIVING_REPLACEMENT = `def calculate_total(items):
-    total = 0
-    for item in items:
-        total += item["price"]
-    return total + 0
-`;
-
-// Syntactically invalid
-const PY_INVALID_REPLACEMENT = `def calculate_total(items:
-    total = 0
-`;
 
 const PY_TEST = `from calculator import calculate_total
 
@@ -82,17 +68,6 @@ func CalculateTotal(prices []float64) float64 {
 	total := 0.0
 	for _, p := range prices {
 		total += p
-	}
-	return total
-}
-`;
-
-const GO_KILLED_REPLACEMENT = `package calculator
-
-func CalculateTotal(prices []float64) float64 {
-	total := 0.0
-	for _, p := range prices {
-		total -= p
 	}
 	return total
 }
@@ -139,7 +114,7 @@ describe.skipIf(SKIP)("integration: runMutations", () => {
     const results = await runMutations({
       sourcePath: srcFile,
       language: "python",
-      mutations: [makeMutation("m001", "subtraction instead of addition", PY_KILLED_REPLACEMENT)],
+      mutations: [makeMutation("m001", "subtraction instead of addition", PY_KILLED[0], PY_KILLED[1])],
       testFiles: [testFile],
       cwd: dir,
       timeoutMs: 30_000,
@@ -166,7 +141,7 @@ describe.skipIf(SKIP)("integration: runMutations", () => {
     const results = await runMutations({
       sourcePath: srcFile,
       language: "python",
-      mutations: [makeMutation("m001", "broken syntax", PY_INVALID_REPLACEMENT)],
+      mutations: [makeMutation("m001", "broken syntax", PY_INVALID[0], PY_INVALID[1])],
       testFiles: [testFile],
       cwd: dir,
       timeoutMs: 30_000,
@@ -188,8 +163,8 @@ describe.skipIf(SKIP)("integration: runMutations", () => {
 
     const controller = new AbortController();
     const mutations = [
-      makeMutation("m001", "subtraction instead of addition", PY_KILLED_REPLACEMENT),
-      makeMutation("m002", "identity addition", PY_SURVIVING_REPLACEMENT),
+      makeMutation("m001", "subtraction instead of addition", PY_KILLED[0], PY_KILLED[1]),
+      makeMutation("m002", "identity addition", PY_SURVIVING[0], PY_SURVIVING[1]),
     ];
 
     // Abort after first mutant completes
@@ -234,7 +209,7 @@ describe.skipIf(SKIP)("integration: runMutations", () => {
     const results = await runMutations({
       sourcePath: srcFile,
       language: "go",
-      mutations: [makeMutation("m001", "subtraction instead of addition", GO_KILLED_REPLACEMENT)],
+      mutations: [makeMutation("m001", "subtraction instead of addition", GO_KILLED[0], GO_KILLED[1])],
       testFiles: [testFile],
       cwd: dir,
       timeoutMs: 60_000,

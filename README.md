@@ -16,9 +16,16 @@ suggestions for missing tests.
 
 - **LLM-backed hotspot analysis** — targets risky logic and boundary conditions
   rather than generating hundreds of mechanical mutations.
-- **Targeted mutation generation** — a small, meaningful set of patches per run.
-- **Patch validation** — syntactically invalid patches are skipped and reported,
-  never executed.
+- **Realistic, domain-specific mutants** — off-by-one, inverted conditions, sign
+  and operator swaps, wrong defaults, missing edge-case and error handling —
+  the bugs a developer could plausibly ship, not cosmetic noise.
+- **Token-efficient patches** — mutations are minimal search/replace snippets
+  (`original` → `mutated`), never full-file bodies, so LLM output stays small.
+- **Equivalence detection** — surviving mutants are judged for semantic
+  equivalence to the original; unkillable false positives are reclassified as
+  `equivalent`, excluded from the score, and never resurfaced for retesting.
+- **Patch validation** — patches that don't match, are ambiguous, or produce
+  invalid syntax are skipped and reported, never executed.
 - **Native test runners** — Python (`pytest`) and Go (`go test`); no external
   mutation tool required.
 - **Flexible Python invocation** — specify any command for the test runner:
@@ -27,8 +34,9 @@ suggestions for missing tests.
   analysis and prove new tests close the gaps.
 - **Pluggable runner architecture** — add a language by implementing a runner,
   without touching the LLM analysis layer.
-- **Streaming results** — per-mutant progress emitted as each test run completes,
-  plus a final structured mutation score and improvement suggestions.
+- **Streaming progress** — per-mutant "running" and outcome lines, an
+  elapsed-time heartbeat during LLM analysis, plus a final structured mutation
+  score and improvement suggestions.
 
 ## Installation
 
@@ -83,8 +91,11 @@ The plugin registers a single LLM-callable tool, `run_mutation_tests`.
 | `prior_mutants` | `Mutation[]`             | —                                | Surviving mutants from a previous run. When supplied, the LLM analysis step is skipped entirely and these exact mutations are retested against the current test suite. |
 
 The tool returns a structured result: total mutations, counts of killed / surviving /
-invalid / timed-out mutants, the overall mutation score, the surviving mutant list,
-and test-improvement suggestions.
+invalid / timed-out / equivalent mutants, the overall mutation score (equivalent
+mutants are excluded from the denominator), the surviving mutant list, and
+test-improvement suggestions. Each mutation is a minimal search/replace patch:
+`original` (the exact snippet to find, unique in the source) and `mutated` (its
+replacement).
 
 ### Retesting survivors
 
@@ -103,6 +114,12 @@ run_mutation_tests(
 )
 → "Retesting 3 prior mutants — skipping LLM analysis…"
 ```
+
+Reuse the *same* mutants each round so retesting proves those specific gaps are
+closed. The loop always terminates: a mutant is either killed by the new test or,
+if it turns out to be unkillable, reclassified as `equivalent` — equivalents drop
+out of `outcome="surviving"`, so the next round has strictly fewer mutants to
+retest and never chases an unkillable mutant forever.
 
 ### Bundled skill
 

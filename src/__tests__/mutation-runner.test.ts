@@ -8,8 +8,8 @@ import { runMutations } from "../mutation-runner";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeMutation(id: string, replacement: string): Mutation {
-  return { id, description: `mutation ${id}`, hotspot: "line 1", replacement, explanation: `explanation for ${id}`, suggestion: `def test_${id}(): pass` };
+function makeMutation(id: string, original: string, mutated: string): Mutation {
+  return { id, description: `mutation ${id}`, hotspot: "line 1", original, mutated, explanation: `explanation for ${id}`, suggestion: `def test_${id}(): pass` };
 }
 
 function makeMockRunner(impl: TestRunner["runTests"]): TestRunner {
@@ -50,7 +50,7 @@ describe("runMutations", () => {
     await runMutations({
       sourcePath,
       language: "python",
-      mutations: [makeMutation("m001", "def add(a, b):\n    return a - b\n")],
+      mutations: [makeMutation("m001", "return a + b", "return a - b")],
       testFiles: [],
       cwd: dir,
       timeoutMs: 5000,
@@ -69,7 +69,7 @@ describe("runMutations", () => {
     const results = await runMutations({
       sourcePath,
       language: "python",
-      mutations: [makeMutation("m001", "def add(a, b):\n    return a - b\n")],
+      mutations: [makeMutation("m001", "return a + b", "return a - b")],
       testFiles: [],
       cwd: dir,
       timeoutMs: 5000,
@@ -89,7 +89,7 @@ describe("runMutations", () => {
     const results = await runMutations({
       sourcePath,
       language: "python",
-      mutations: [makeMutation("m001", "def add(a, b):\n    return a - b\n")],
+      mutations: [makeMutation("m001", "return a + b", "return a - b")],
       testFiles: [],
       cwd: dir,
       timeoutMs: 5000,
@@ -108,7 +108,7 @@ describe("runMutations", () => {
     const results = await runMutations({
       sourcePath,
       language: "python",
-      mutations: [makeMutation("m001", "def add(a, b):\n    return a - b\n")],
+      mutations: [makeMutation("m001", "return a + b", "return a - b")],
       testFiles: [],
       cwd: dir,
       timeoutMs: 5000,
@@ -127,7 +127,7 @@ describe("runMutations", () => {
     const results = await runMutations({
       sourcePath,
       language: "python",
-      mutations: [makeMutation("m001", "def add(a, b:\n    return a + b\n")],
+      mutations: [makeMutation("m001", "return a + b", "return a + b:")],
       testFiles: [],
       cwd: dir,
       timeoutMs: 5000,
@@ -153,8 +153,8 @@ describe("runMutations", () => {
       sourcePath,
       language: "python",
       mutations: [
-        makeMutation("m001", "def add(a, b):\n    return a - b\n"),
-        makeMutation("m002", "def add(a, b):\n    return a * b\n"),
+        makeMutation("m001", "return a + b", "return a - b"),
+        makeMutation("m002", "return a + b", "return a * b"),
       ],
       testFiles: [],
       cwd: dir,
@@ -175,7 +175,7 @@ describe("runMutations", () => {
       Promise.withResolvers<{ killed: boolean; output: string }>();
     const runner = makeMockRunner(() => slowResult);
 
-    const mutations = [makeMutation("m001", "def add(a, b):\n    return a - b\n")];
+    const mutations = [makeMutation("m001", "return a + b", "return a - b")];
     const opts = {
       sourcePath,
       language: "python" as const,
@@ -198,7 +198,7 @@ describe("runMutations", () => {
     await first;
   });
 
-  it("calls onUpdate once per mutant with running count and outcome", async () => {
+  it("emits a running line then an outcome line per mutant", async () => {
     if (!(await python3Available())) return;
     const runner = makeMockRunner(async () => ({ killed: true, output: "" }));
 
@@ -207,8 +207,8 @@ describe("runMutations", () => {
       sourcePath,
       language: "python",
       mutations: [
-        makeMutation("m001", "def add(a, b):\n    return a - b\n"),
-        makeMutation("m002", "def add(a, b):\n    return a * b\n"),
+        makeMutation("m001", "return a + b", "return a - b"),
+        makeMutation("m002", "return a + b", "return a * b"),
       ],
       testFiles: [],
       cwd: dir,
@@ -218,10 +218,14 @@ describe("runMutations", () => {
       runner,
     });
 
-    expect(updates).toHaveLength(2);
+    // Each mutant emits a "running tests…" line then an outcome line.
+    expect(updates).toHaveLength(4);
     expect(updates[0]).toContain("1/2");
-    expect(updates[1]).toContain("2/2");
-    expect(updates[0]).toContain("killed");
+    expect(updates[0]).toContain("running tests");
+    expect(updates[1]).toContain("1/2");
+    expect(updates[1]).toContain("killed");
+    expect(updates[3]).toContain("2/2");
+    expect(updates[3]).toContain("killed");
   });
 
   it("returns empty array and cleans up when mutations list is empty", async () => {
@@ -240,5 +244,84 @@ describe("runMutations", () => {
 
     expect(results).toHaveLength(0);
     expect(existsSync(bakPath)).toBe(false);
+  });
+
+  it("records invalid without running tests when the original snippet is not found", async () => {
+    const runner = makeMockRunner(async () => ({ killed: false, output: "" }));
+
+    const results = await runMutations({
+      sourcePath,
+      language: "python",
+      mutations: [makeMutation("m001", "return x - y", "return x + y")],
+      testFiles: [],
+      cwd: dir,
+      timeoutMs: 5000,
+      signal: new AbortController().signal,
+      runner,
+    });
+
+    expect(results[0].outcome).toBe("invalid");
+    expect(results[0].note).toContain("not found");
+    expect(runner.runTests).not.toHaveBeenCalled();
+    expect(readFileSync(sourcePath, "utf8")).toBe(originalContent);
+  });
+
+  it("records invalid without running tests when the original snippet is ambiguous", async () => {
+    writeFileSync(sourcePath, "x = 1\nx = 1\n", "utf8");
+    const runner = makeMockRunner(async () => ({ killed: false, output: "" }));
+
+    const results = await runMutations({
+      sourcePath,
+      language: "python",
+      mutations: [makeMutation("m001", "x = 1", "x = 2")],
+      testFiles: [],
+      cwd: dir,
+      timeoutMs: 5000,
+      signal: new AbortController().signal,
+      runner,
+    });
+
+    expect(results[0].outcome).toBe("invalid");
+    expect(results[0].note).toContain("ambiguous");
+    expect(runner.runTests).not.toHaveBeenCalled();
+  });
+
+  it("reclassifies a survivor as equivalent when checkEquivalence agrees", async () => {
+    if (!(await python3Available())) return;
+    const runner = makeMockRunner(async () => ({ killed: false, output: "1 passed" }));
+
+    const results = await runMutations({
+      sourcePath,
+      language: "python",
+      mutations: [makeMutation("m001", "return a + b", "return b + a")],
+      testFiles: [],
+      cwd: dir,
+      timeoutMs: 5000,
+      signal: new AbortController().signal,
+      runner,
+      checkEquivalence: async () => ({ equivalent: true, rationale: "addition is commutative" }),
+    });
+
+    expect(results[0].outcome).toBe("equivalent");
+    expect(results[0].note).toBe("addition is commutative");
+  });
+
+  it("keeps a survivor surviving when checkEquivalence disagrees", async () => {
+    if (!(await python3Available())) return;
+    const runner = makeMockRunner(async () => ({ killed: false, output: "1 passed" }));
+
+    const results = await runMutations({
+      sourcePath,
+      language: "python",
+      mutations: [makeMutation("m001", "return a + b", "return a - b")],
+      testFiles: [],
+      cwd: dir,
+      timeoutMs: 5000,
+      signal: new AbortController().signal,
+      runner,
+      checkEquivalence: async () => ({ equivalent: false, rationale: "differs for b != 0" }),
+    });
+
+    expect(results[0].outcome).toBe("surviving");
   });
 });

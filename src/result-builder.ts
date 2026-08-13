@@ -18,11 +18,15 @@ export function buildResult(opts: {
   const surviving = mutants.filter((m) => m.outcome === "surviving").length;
   const invalid = mutants.filter((m) => m.outcome === "invalid").length;
   const timeout = mutants.filter((m) => m.outcome === "timeout").length;
+  const equivalent = mutants.filter((m) => m.outcome === "equivalent").length;
 
   const tested = killed + surviving;
   const score = tested === 0 ? null : Math.round((killed / tested) * 100);
 
+  // Only genuine survivors are actionable. Equivalent mutants are unkillable and
+  // deliberately excluded so the fix-and-retest loop has a terminating condition.
   const survivingMutants = mutants.filter((m) => m.outcome === "surviving");
+  const equivalentMutants = mutants.filter((m) => m.outcome === "equivalent");
   const suggestions = survivingMutants.map((m) => m.mutation.suggestion);
 
   const details: MutationRunResult = {
@@ -35,18 +39,20 @@ export function buildResult(opts: {
     surviving,
     invalid,
     timeout,
+    equivalent,
     score,
     mutants,
     suggestions,
   };
 
-  const content = renderContent(details, survivingMutants);
+  const content = renderContent(details, survivingMutants, equivalentMutants);
   return { content, details };
 }
 
 function renderContent(
   details: MutationRunResult,
   survivingMutants: MutantResult[],
+  equivalentMutants: MutantResult[],
 ): string {
   const {
     cancelled,
@@ -58,6 +64,7 @@ function renderContent(
     surviving,
     invalid,
     timeout,
+    equivalent,
     score,
   } = details;
 
@@ -72,7 +79,7 @@ function renderContent(
     lines.push("Score: N/A (no mutants tested)");
   } else {
     lines.push(
-      `Score: ${score}% (${killed} killed / ${surviving} surviving / ${invalid} invalid / ${timeout} timeout)`,
+      `Score: ${score}% (${killed} killed / ${surviving} surviving / ${invalid} invalid / ${timeout} timeout / ${equivalent} equivalent)`,
     );
   }
   lines.push("");
@@ -86,6 +93,16 @@ function renderContent(
         `  ${i + 1}. [${m.mutation.id}] ${m.mutation.description} — ${m.mutation.explanation}`,
       );
       lines.push(`     → Suggested test: ${m.mutation.suggestion}`);
+    });
+  }
+
+  if (equivalentMutants.length > 0) {
+    lines.push("");
+    lines.push("Equivalent mutants (unkillable — excluded from score, do not retest):");
+    equivalentMutants.forEach((m, i) => {
+      lines.push(
+        `  ${i + 1}. [${m.mutation.id}] ${m.mutation.description}${m.note ? ` — ${m.note}` : ""}`,
+      );
     });
   }
   lines.push("");

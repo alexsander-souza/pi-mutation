@@ -5,7 +5,7 @@ import { completeSimple } from "@oh-my-pi/pi-ai";
 import type { Context, TextContent } from "@oh-my-pi/pi-ai";
 import { resolveTarget } from "./target-resolver";
 import { discoverTests } from "./test-discovery";
-import { analyzeAndGenerate } from "./analysis-engine";
+import { analyzeAndGenerate, judgeEquivalence } from "./analysis-engine";
 import { runMutations } from "./mutation-runner";
 import { buildResult } from "./result-builder";
 import { getRunner } from "./runners/index";
@@ -44,6 +44,25 @@ function extractText(content: unknown[]): string {
     .filter((c): c is TextContent => typeof c === "object" && c !== null && "type" in c && c.type === "text")
     .map((c) => c.text)
     .join("");
+}
+
+// Emit an elapsed-time heartbeat while a long single-shot async step runs, so
+// the user gets steady feedback during the otherwise-silent LLM analysis call.
+async function withHeartbeat<T>(
+  tick: ((text: string) => void) | null,
+  label: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  if (!tick) return work();
+  const start = Date.now();
+  const timer = setInterval(() => {
+    tick(`${label} — ${Math.round((Date.now() - start) / 1000)}s elapsed…`);
+  }, 4000);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+  }
 }
 
 export default function piMutation(pi: ExtensionAPI): void {
@@ -89,7 +108,8 @@ with: mv <file>.pi-mutation-bak <file>`,
         id: z.string(),
         description: z.string(),
         hotspot: z.string(),
-        replacement: z.string(),
+        original: z.string(),
+        mutated: z.string(),
         explanation: z.string(),
         suggestion: z.string(),
       })).optional().describe(
@@ -120,6 +140,7 @@ with: mv <file>.pi-mutation-bak <file>`,
           surviving: 0,
           invalid: 0,
           timeout: 0,
+          equivalent: 0,
           score: null,
           mutants: [],
           suggestions: [],
@@ -182,37 +203,11 @@ with: mv <file>.pi-mutation-bak <file>`,
         );
       }
 
-      // FR-003 / FR-004 / FR-015: hotspot analysis + mutation generation,
-      // OR retest prior survivors without calling the LLM.
-      let mutations: Mutation[];
-
-      if (params.prior_mutants && params.prior_mutants.length > 0) {
-        mutations = params.prior_mutants;
-        onUpdate?.({
-          content: [{ type: "text" as const, text: `Retesting ${mutations.length} prior mutant${mutations.length === 1 ? "" : "s"} — skipping LLM analysis…` }],
-        });
-      } else {
-        // Read source and test file contents for LLM analysis
-        const sourceCode = readFileSync(resolved.filePath, "utf8");
-        const testCode = testFiles.map((f) => readFileSync(f, "utf8")).join("\n\n");
-
-        const model = ctx.models.current();
-        if (!model) {
-          return errorResult("No active model in this session. Cannot run mutation analysis.", { error: "no_model" });
-        }
-
-        onUpdate?.({
-          content: [{ type: "text" as const, text: `Analyzing ${resolved.filePath} — generating mutation plan (this may take a moment)…` }],
-        });
-
-        const generated = await analyzeAndGenerate({
-          sourceCode,
-          testCode,
-          target: params.target,
-          scope,
-          maxMutations,
-          language: resolved.language,
-          llmCall: async (prompt) => {
+      // Shared LLM-call closure — drives both mutation generation and the
+      // survivor equivalence judge. Null when the session has no active model.
+      const model = ctx.models.current();
+      const llmCall = model
+        ? async (prompt: string): Promise<string> => {
             const apiKey = await ctx.modelRegistry.authStorage.getApiKey(
               model.provider,
               undefined,
@@ -223,8 +218,44 @@ with: mv <file>.pi-mutation-bak <file>`,
             };
             const response = await completeSimple(model, context, { apiKey, signal });
             return extractText(response.content);
-          },
+          }
+        : null;
+      const tick = onUpdate
+        ? (text: string): void => onUpdate({ content: [{ type: "text" as const, text }] })
+        : null;
+
+      // FR-003 / FR-004 / FR-015: hotspot analysis + mutation generation,
+      // OR retest prior survivors without calling the LLM.
+      let mutations: Mutation[];
+
+      if (params.prior_mutants && params.prior_mutants.length > 0) {
+        mutations = params.prior_mutants;
+        onUpdate?.({
+          content: [{ type: "text" as const, text: `Retesting ${mutations.length} prior mutant${mutations.length === 1 ? "" : "s"} — skipping LLM analysis…` }],
         });
+      } else {
+        if (!llmCall) {
+          return errorResult("No active model in this session. Cannot run mutation analysis.", { error: "no_model" });
+        }
+
+        // Read source and test file contents for LLM analysis
+        const sourceCode = readFileSync(resolved.filePath, "utf8");
+        const testCode = testFiles.map((f) => readFileSync(f, "utf8")).join("\n\n");
+
+        const label = `Analyzing ${resolved.filePath} — generating mutation plan`;
+        tick?.(`${label} (this may take a moment)…`);
+
+        const generated = await withHeartbeat(tick, label, () =>
+          analyzeAndGenerate({
+            sourceCode,
+            testCode,
+            target: params.target,
+            scope,
+            maxMutations,
+            language: resolved.language,
+            llmCall,
+          }),
+        );
 
         if (!Array.isArray(generated)) {
           return errorResult(
@@ -238,6 +269,14 @@ with: mv <file>.pi-mutation-bak <file>`,
           content: [{ type: "text" as const, text: `Generated ${mutations.length} mutation${mutations.length === 1 ? "" : "s"} — running test suite for each…` }],
         });
       }
+
+      // Equivalence judge for survivors — filters unkillable false positives and
+      // gives the fix-and-retest loop a terminating condition. Skipped when no
+      // model is available (e.g. prior_mutants retest in a headless session).
+      const checkEquivalence = llmCall
+        ? (mutation: Mutation) =>
+            judgeEquivalence({ mutation, language: resolved.language, llmCall })
+        : undefined;
 
       // FR-005–FR-009, FR-012, FR-014: execute mutations and build result.
       // runMutations may throw on the concurrent-run guard, a missing test
@@ -254,6 +293,7 @@ with: mv <file>.pi-mutation-bak <file>`,
           signal: signal ?? new AbortController().signal,
           runner,
           onUpdate: (msg) => onUpdate?.({ content: [{ type: "text" as const, text: msg }] }),
+          checkEquivalence,
         });
 
         // FR-008: build and return final result
