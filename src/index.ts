@@ -136,7 +136,7 @@ with: mv <file>.pi-mutation-bak <file>`,
       const maxMutations = Math.min(params.max_mutations ?? defaultCap, defaultCap * 2);
       const timeoutMs = params.timeout_ms ?? 60_000;
 
-      // FR-009: pre-aborted — return immediately without touching the filesystem
+      // Pre-aborted: return immediately without touching the filesystem.
       if (signal?.aborted) {
         const empty: MutationRunResult = {
           cancelled: true,
@@ -159,7 +159,7 @@ with: mv <file>.pi-mutation-bak <file>`,
         };
       }
 
-      // FR-016: budget warning when caller raises cap above default. maxMutations
+      // Budget warning when the caller raises the cap above default. maxMutations
       // is clamped to defaultCap*2, so report the effective count that will run.
       if (params.max_mutations !== undefined && params.max_mutations > defaultCap) {
         const clamped = maxMutations < params.max_mutations ? ` (hard cap ${defaultCap * 2})` : "";
@@ -171,7 +171,6 @@ with: mv <file>.pi-mutation-bak <file>`,
         });
       }
 
-      // FR-001 / FR-002 / FR-011: resolve target
       const resolved = resolveTarget(params.target, ctx.cwd);
       if ("kind" in resolved) {
         return errorResult(resolved.message, { error: resolved.kind });
@@ -183,7 +182,7 @@ with: mv <file>.pi-mutation-bak <file>`,
         onUpdate?.({ content: [{ type: "text" as const, text: `Resolved symbol "${resolved.symbol}" → ${path.relative(ctx.cwd, resolved.filePath)}` }] });
       }
 
-      // FR-013: discover test files (or use caller-supplied paths)
+      // Discover test files, or use caller-supplied paths.
       let testFiles: string[];
       if (params.test_files && params.test_files.length > 0) {
         const resolvedPaths = params.test_files.map((f) => path.resolve(ctx.cwd, f));
@@ -206,7 +205,7 @@ with: mv <file>.pi-mutation-bak <file>`,
         testFiles = discovery;
       }
 
-      // NFR-005: runner lookup — Python uses a command-specific runner, Go uses the registry.
+      // Runner lookup — Python uses a command-specific runner, Go uses the registry.
       // test_command lets the caller specify a venv path or wrapper (e.g. "uv run pytest").
       const runner =
         resolved.language === "python"
@@ -244,8 +243,8 @@ with: mv <file>.pi-mutation-bak <file>`,
         ? (text: string): void => onUpdate({ content: [{ type: "text" as const, text }] })
         : null;
 
-      // FR-003 / FR-004 / FR-015: hotspot analysis + mutation generation,
-      // OR retest prior survivors without calling the LLM.
+      // Hotspot analysis + mutation generation, or retest prior survivors without
+      // calling the LLM.
       let mutations: Mutation[];
 
       if (params.prior_mutants && params.prior_mutants.length > 0) {
@@ -259,7 +258,6 @@ with: mv <file>.pi-mutation-bak <file>`,
           return errorResult("No active model in this session. Cannot run mutation analysis.", { error: "no_model" });
         }
 
-        // Read source and test file contents for LLM analysis
         const sourceCode = readFileSync(resolved.filePath, "utf8");
         const testCode = testFiles.map((f) => readFileSync(f, "utf8")).join("\n\n");
 
@@ -299,7 +297,6 @@ with: mv <file>.pi-mutation-bak <file>`,
             judgeEquivalence({ mutation, language: resolved.language, llmCall })
         : undefined;
 
-      // FR-005–FR-009, FR-012, FR-014: execute mutations and build result.
       // runMutations may throw on the concurrent-run guard, a missing test
       // runner binary, or an unexpected runner failure — surface as a named
       // error result, never thrown to the caller (conventions.md).
@@ -318,7 +315,6 @@ with: mv <file>.pi-mutation-bak <file>`,
           pythonCommand: resolved.language === "python" ? params.test_command : undefined,
         });
 
-        // FR-008: build and return final result
         const { content, details } = buildResult({
           mutants,
           cancelled: signal?.aborted ?? false,

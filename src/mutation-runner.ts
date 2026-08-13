@@ -179,7 +179,6 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
       const mutation = mutations[i];
       const n = `${i + 1}/${mutations.length}`;
 
-      // Apply the search/replace patch against the pristine source
       const applied = applyMutation(originalSource, mutation);
       if (!applied.ok) {
         results.push({ mutation, outcome: "invalid", note: applied.reason });
@@ -197,8 +196,8 @@ export async function runMutations(opts: RunMutationsOpts): Promise<MutantResult
         continue;
       }
 
-      // FR-progress: announce the test run before the (potentially slow) suite
-      // so the user is not left without feedback while it executes.
+      // Announce the test run before the (potentially slow) suite so the user is
+      // not left without feedback while it executes.
       onUpdate?.(`▶ mutant ${n} — "${mutation.description}" — running tests…`);
 
       let outcome: MutantResult["outcome"];
