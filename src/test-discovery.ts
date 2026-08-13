@@ -6,7 +6,7 @@ import type { DiscoveryError, ResolvedTarget } from "./types";
  * Discover test files for a resolved target using language conventions.
  * Returns all matching paths, or a DiscoveryError listing every searched path.
  */
-export function discoverTests(target: ResolvedTarget): string[] | DiscoveryError {
+export function discoverTests(target: ResolvedTarget, cwd?: string): string[] | DiscoveryError {
   const dir = path.dirname(target.filePath);
   const base = path.basename(target.filePath, path.extname(target.filePath));
 
@@ -33,6 +33,45 @@ export function discoverTests(target: ResolvedTarget): string[] | DiscoveryError
   });
 
   if (found.length > 0) return found;
+
+  // Walk-up heuristic: Python only, bounded by cwd.
+  // At each ancestor walks the directory tree checking for a mirrored
+  // tests/ subtree: ancestor/tests/{rel-from-ancestor-to-srcdir}/test_{base}.py
+  // This catches project layouts like src/tests/…/test_foo.py mirroring src/…/foo.py.
+  if (target.language === "python" && cwd) {
+    const stop = path.resolve(cwd);
+    const walkSearched: string[] = [];
+    let ancestor = dir;
+
+    for (;;) {
+      // rel is "." at the first iteration (ancestor === dir), then the
+      // path component(s) from ancestor down to the source directory.
+      const rel = path.relative(ancestor, dir);
+      const c1 = path.join(ancestor, "tests", rel, `test_${base}.py`);
+      const c2 = path.join(ancestor, "tests", rel, `${base}_test.py`);
+      walkSearched.push(c1, c2);
+
+      for (const candidate of [c1, c2]) {
+        try {
+          if (fs.statSync(candidate).isFile()) return [candidate];
+        } catch {
+          // not found — continue
+        }
+      }
+
+      if (ancestor === stop) break;
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) break; // filesystem root
+      ancestor = parent;
+    }
+
+    const allSearched = [...searchedPaths, ...walkSearched];
+    return {
+      kind: "not_found",
+      message: `No test files found for ${target.filePath}. Searched: ${allSearched.join(", ")}`,
+      searchedPaths: allSearched,
+    };
+  }
 
   return {
     kind: "not_found",
