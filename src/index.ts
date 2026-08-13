@@ -246,6 +246,9 @@ with: mv <file>.pi-mutation-bak <file>`,
       // Hotspot analysis + mutation generation, or retest prior survivors without
       // calling the LLM.
       let mutations: Mutation[];
+      // Read once up front: the generator needs it, and the equivalence judge
+      // needs it as reachability context for both branches (incl. prior_mutants).
+      const sourceCode = readFileSync(resolved.filePath, "utf8");
 
       if (params.prior_mutants && params.prior_mutants.length > 0) {
         mutations = params.prior_mutants.slice(0, MAX_RETEST_MUTANTS);
@@ -258,7 +261,6 @@ with: mv <file>.pi-mutation-bak <file>`,
           return errorResult("No active model in this session. Cannot run mutation analysis.", { error: "no_model" });
         }
 
-        const sourceCode = readFileSync(resolved.filePath, "utf8");
         const testCode = testFiles.map((f) => readFileSync(f, "utf8")).join("\n\n");
 
         const label = `Analyzing ${resolved.filePath} — generating mutation plan`;
@@ -294,7 +296,12 @@ with: mv <file>.pi-mutation-bak <file>`,
       // model is available (e.g. prior_mutants retest in a headless session).
       const checkEquivalence = llmCall
         ? (mutation: Mutation) =>
-            judgeEquivalence({ mutation, language: resolved.language, llmCall })
+            judgeEquivalence({
+              mutation,
+              language: resolved.language,
+              context: sourceCode,
+              llmCall,
+            })
         : undefined;
 
       // runMutations may throw on the concurrent-run guard, a missing test
