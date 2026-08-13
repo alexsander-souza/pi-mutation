@@ -16,26 +16,21 @@ const SYMBOLS: Record<MutantResult["outcome"], string> = {
 
 async function checkPythonSyntax(filePath: string): Promise<boolean> {
   for (const bin of ["python3", "python"]) {
-    const ok = await new Promise<boolean>((resolve) => {
-      const child = spawn(
-        bin,
-        ["-c", `import ast; ast.parse(open(${JSON.stringify(filePath)}).read())`],
-        { stdio: "pipe" },
-      );
-      child.on("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "ENOENT") resolve(false); // try next binary
-        else resolve(false);
-      });
-      child.on("close", (code) => resolve(code === 0));
+    const { promise, resolve } = Promise.withResolvers<"ok" | "syntax_error" | "not_found">();
+    const child = spawn(
+      bin,
+      ["-c", `import ast; ast.parse(open(${JSON.stringify(filePath)}).read())`],
+      { stdio: "pipe" },
+    );
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      resolve(err.code === "ENOENT" ? "not_found" : "syntax_error");
     });
-    if (ok) return true;
-    // If ENOENT (binary not found), try next; if syntax error (exit≠0), stop
-    const exists = await new Promise<boolean>((resolve) => {
-      const probe = spawn(bin, ["--version"], { stdio: "pipe" });
-      probe.on("error", () => resolve(false));
-      probe.on("close", () => resolve(true));
-    });
-    if (exists) return false; // binary exists but syntax check failed
+    child.on("close", (code) => resolve(code === 0 ? "ok" : "syntax_error"));
+
+    const result = await promise;
+    if (result === "ok") return true;
+    if (result === "syntax_error") return false; // binary exists, file is invalid — stop
+    // "not_found": try next binary
   }
   return false;
 }

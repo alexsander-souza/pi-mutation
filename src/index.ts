@@ -32,6 +32,9 @@ function errorResult(message: string, details: Record<string, unknown>) {
   };
 }
 
+// TextContent from pi-ai is currently { type: "text"; text: string }.
+// If pi-ai adds required fields to TextContent, this guard may pass objects
+// that don't satisfy the full interface — check pi-ai's own guards on upgrade.
 function extractText(content: unknown[]): string {
   return content
     .filter((c): c is TextContent => typeof c === "object" && c !== null && "type" in c && c.type === "text")

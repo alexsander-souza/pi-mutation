@@ -1,7 +1,7 @@
 # SDD Handoff Brief
 
 > Generated: 2026-08-12
-> Readiness: **ready for implementation**
+> Readiness: **ready for release** (approved with follow-ups — none blocking)
 
 ## Feature
 
@@ -9,7 +9,7 @@
 |-------|-------|
 | ID | 001 |
 | Name | run_mutation_tests |
-| Status | tasks:approved |
+| Status | review:done |
 
 ## Source Artifacts
 
@@ -18,75 +18,29 @@
 | Requirements | `.ai/sdd/specs/001-run-mutation-tests/requirements.md` |
 | Design | `.ai/sdd/specs/001-run-mutation-tests/design.md` |
 | Tasks | `.ai/sdd/specs/001-run-mutation-tests/tasks.md` |
+| Review | `.ai/sdd/specs/001-run-mutation-tests/review.md` |
 | Status | `.ai/sdd/specs/001-run-mutation-tests/.status` |
 | Idea (upstream) | `.ai/sdd/ideas/001-llm-backed-mutation-engine.md` |
 
-## What to Build
+## Review Verdict
 
-A single OMP extension tool `run_mutation_tests` that:
+**Approved with follow-ups** — all 16 FRs and 5 NFRs pass; 62/62 tests green (58 unit + 4 integration); typecheck clean.
 
-1. Resolves a `target` (file path or symbol name) to a source file + language (Python or Go)
-2. Discovers relevant test files by language convention
-3. Calls the LLM to identify mutation hotspots and generate targeted full-body replacement patches
-4. For each mutation: backs up the original file, writes the mutation in-place, runs the native test runner (pytest / go test), restores the original
-5. Streams progress via `onUpdate` after each mutant
-6. Returns a structured result: killed / surviving / invalid / timeout counts, mutation score, surviving mutant explanations, and test improvement suggestions
+## Verification Evidence
 
-## Key Architectural Constraints
+| Suite | Command | Result |
+|-------|---------|--------|
+| Typecheck | `bunx tsc --noEmit` | exit 0, no diagnostics |
+| Unit tests | `bun test src/__tests__/` | 58 pass, 4 skip (env-gated), 0 fail |
+| Integration | `RUN_INTEGRATION_TESTS=1 bun test src/__tests__/integration.test.ts` | 4 pass, 0 fail (requires pytest + go on PATH) |
 
-- Mutations written in-place; original backed up to `<file>.pi-mutation-bak`; restored in `finally` + SIGINT/SIGTERM handler
-- Only one concurrent run per file (module-level `Set<string>` guard)
-- Subprocess spawned via `child_process.spawn` with argv array — never shell strings
-- Per-mutation timeout: 60 s default, configurable via `timeout_ms`
-- `max_mutations` hard cap enforced by extension post-LLM, not by prompt: 10 (function) / 20 (file)
-- Abort signal: checked before each mutant; kills in-flight subprocess; returns partial results with `cancelled: true`
-- Syntax validation before test run: `python3 -c "import ast; ast.parse(...)"` / `gofmt -e`
-- Original file must be byte-identical after every run, success or failure
+## Known Follow-Ups (non-blocking)
 
-## Implementation Order
-
-```
-T1 scaffold → T2 types → [T3 resolver, T4 discovery, T5 runners, T6 analysis, T8 result-builder]
-                        → T7 mutation-runner → T9 index.ts → T10 integration tests
-```
-
-T3–T6 and T8 are parallel-safe after T2.
-
-## Likely Files
-
-| File | Action |
-|------|--------|
-| `package.json` | create |
-| `tsconfig.json` | create |
-| `src/index.ts` | create |
-| `src/types.ts` | create |
-| `src/target-resolver.ts` | create |
-| `src/test-discovery.ts` | create |
-| `src/analysis-engine.ts` | create |
-| `src/mutation-runner.ts` | create |
-| `src/result-builder.ts` | create |
-| `src/runners/index.ts` | create |
-| `src/runners/python.ts` | create |
-| `src/runners/go.ts` | create |
-| `src/__tests__/*.test.ts` | create (per task) |
-| `fixtures/python/` | create (T10) |
-| `fixtures/go/` | create (T10) |
-
-## Verification Plan
-
-| Level | Command | Gate |
-|-------|---------|------|
-| Typecheck | `npx tsc --noEmit` | Every task |
-| Unit tests | `node --test src/__tests__/<module>.test.ts` | T3–T8 |
-| Integration tests | `RUN_INTEGRATION_TESTS=1 node --test src/__tests__/integration.test.ts` | T10 only; env-gated |
+1. `checkPythonSyntax` in `mutation-runner.ts` spawns a redundant `python3 --version` probe on every syntax-error mutant — return `false` directly on non-zero close; only try next binary on ENOENT.
+2. Integration test header comment references `PYTEST_BIN` env var that was removed — update to say "requires pytest on PATH".
+3. `completeSimple` LLM call in `index.ts` is not unit-testable without a live model — acceptable for v1; consider injecting as a parameter in a future refactor.
 
 ## Blockers
 
-None. All requirements approved, design approved, tasks approved, no open questions.
+None.
 
-## Notes for Implementer
-
-- LLM returns a JSON array of `Mutation` objects; extension parses and slices to `max_mutations` — do not rely on the LLM to self-cap
-- `pi.exec()` is not used; `pi.exec` abort semantics are undocumented — `child_process.spawn` with manual `AbortSignal` wiring is the approved approach (TD-002)
-- `python3` falls back to `python` on ENOENT for the syntax check
-- Tool result `content` is human-readable text; `details` carries the structured `MutationRunResult` for LLM reasoning

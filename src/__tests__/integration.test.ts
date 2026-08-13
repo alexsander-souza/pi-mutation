@@ -3,11 +3,11 @@
  *
  * Requires:
  *   RUN_INTEGRATION_TESTS=1
- *   python3 + pytest on PATH (or PYTEST_BIN env var pointing to pytest binary)
+ *   python3 + pytest on PATH
  *   go + gofmt on PATH
  *
  * Run with:
- *   RUN_INTEGRATION_TESTS=1 PYTEST_BIN=/tmp/pytest-venv/bin/pytest bun test src/__tests__/integration.test.ts
+ *   RUN_INTEGRATION_TESTS=1 bun test src/__tests__/integration.test.ts
  */
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, copyFileSync } from "fs";
